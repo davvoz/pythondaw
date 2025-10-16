@@ -376,7 +376,7 @@ class MainWindow:
         print(status)
 
     def _on_bpm_change(self):
-        """Update project BPM and adjust loop points."""
+        """Update project BPM and adjust loop points and clip positions."""
         if self.project is None or self._toolbar_manager is None:
             return
         
@@ -400,8 +400,36 @@ class MainWindow:
                 except Exception:
                     pass
             
+            # Convert all clip positions to musical time (bars) before changing BPM
+            clip_positions = []  # (track_idx, clip, start_bars, duration_bars)
+            if self.timeline is not None:
+                try:
+                    for track_idx, clip in self.timeline.all_placements():
+                        start_bars = self.project.seconds_to_bars(clip.start_time)
+                        duration_bars = self.project.seconds_to_bars(clip.length_seconds)
+                        clip_positions.append((track_idx, clip, start_bars, duration_bars))
+                except Exception as e:
+                    print(f"Error storing clip positions: {e}")
+            
             # Update BPM
             self.project.bpm = float(new_bpm)
+            
+            # Convert clip positions back to seconds with new BPM
+            clips_adjusted = 0
+            for track_idx, clip, start_bars, duration_bars in clip_positions:
+                try:
+                    new_start_time = self.project.bars_to_seconds(start_bars)
+                    new_duration = self.project.bars_to_seconds(duration_bars)
+                    
+                    # Update clip timing
+                    clip.start_time = new_start_time
+                    # Only update duration if it was explicitly set (not derived from buffer)
+                    if clip.duration is not None:
+                        clip.duration = new_duration
+                    
+                    clips_adjusted += 1
+                except Exception as e:
+                    print(f"Error adjusting clip {clip.name}: {e}")
             
             # Convert loop points back
             if self.player is not None and loop_enabled:
@@ -409,13 +437,16 @@ class MainWindow:
                     new_loop_start = self.project.bars_to_seconds(loop_start_bars)
                     new_loop_end = self.project.bars_to_seconds(loop_end_bars)
                     self.player.set_loop(loop_enabled, new_loop_start, new_loop_end)
-                    print(f"Loop adjusted: {loop_start_sec:.3f}s->{new_loop_start:.3f}s, {loop_end_sec:.3f}s->{new_loop_end:.3f}s")
+                    print(f"🔁 Loop adjusted: {loop_start_sec:.3f}s → {new_loop_start:.3f}s, {loop_end_sec:.3f}s → {new_loop_end:.3f}s")
                 except Exception as e:
                     print(f"Loop adjustment error: {e}")
             
             if self._timeline_canvas:
                 self._timeline_canvas.redraw()
-            print(f"BPM changed: {old_bpm:.1f} → {new_bpm}")
+            
+            print(f"♪ BPM changed: {old_bpm:.1f} → {new_bpm}")
+            if clips_adjusted > 0:
+                print(f"✓ {clips_adjusted} clip(s) adjusted to maintain musical grid alignment")
         except Exception as e:
             print(f"BPM change error: {e}")
 
