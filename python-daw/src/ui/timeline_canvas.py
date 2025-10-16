@@ -39,6 +39,9 @@ class TimelineCanvas:
         # Loop selection
         self.loop_selection_start = None
         
+        # Loop marker dragging
+        self.dragging_loop_marker = None  # "start" or "end"
+        
         self._build_canvas(parent)
 
     def _build_canvas(self, parent):
@@ -363,34 +366,44 @@ class TimelineCanvas:
     def _draw_loop_marker(self, x, height, label, is_end=False):
         """Draw a single loop marker."""
         # Marker line
-        self.canvas.create_line(
+        line_id = self.canvas.create_line(
             x, self.ruler_height, x, height,
-            fill="#10b981", width=3
+            fill="#10b981", width=3, tags=f"loop_marker_{label.lower()}"
         )
         
-        # Marker flag
+        # Marker flag (handle draggabile)
         if is_end:
-            self.canvas.create_polygon(
+            handle_id = self.canvas.create_polygon(
                 x, self.ruler_height,
                 x - 12, self.ruler_height + 6,
                 x, self.ruler_height + 12,
-                fill="#10b981", outline="#065f46"
+                fill="#10b981", outline="#065f46", width=2,
+                tags=f"loop_marker_{label.lower()}"
             )
-            self.canvas.create_text(
+            text_id = self.canvas.create_text(
                 x - 4, self.ruler_height + 6, text=label,
-                fill="#ffffff", font=("Segoe UI", 10, "bold")
+                fill="#ffffff", font=("Segoe UI", 10, "bold"),
+                tags=f"loop_marker_{label.lower()}"
             )
         else:
-            self.canvas.create_polygon(
+            handle_id = self.canvas.create_polygon(
                 x, self.ruler_height,
                 x + 12, self.ruler_height + 6,
                 x, self.ruler_height + 12,
-                fill="#10b981", outline="#065f46"
+                fill="#10b981", outline="#065f46", width=2,
+                tags=f"loop_marker_{label.lower()}"
             )
-            self.canvas.create_text(
+            text_id = self.canvas.create_text(
                 x + 4, self.ruler_height + 6, text=label,
-                fill="#ffffff", font=("Segoe UI", 10, "bold")
+                fill="#ffffff", font=("Segoe UI", 10, "bold"),
+                tags=f"loop_marker_{label.lower()}"
             )
+        
+        # Aggiungi una zona cliccabile più grande per facilitare il drag
+        hitbox_id = self.canvas.create_rectangle(
+            x - 15, self.ruler_height, x + 15, self.ruler_height + 30,
+            fill="", outline="", tags=f"loop_marker_{label.lower()}"
+        )
 
     def _draw_cursor(self, height):
         """Draw the playback cursor."""
@@ -477,6 +490,10 @@ class TimelineCanvas:
         x = self.canvas.canvasx(event.x)
         y = self.canvas.canvasy(event.y)
         
+        # Check if clicking on loop markers
+        if self._check_loop_marker_click(x, y):
+            return
+        
         # Check for loop region selection with Shift
         if event.state & 0x0001:  # Shift key
             time = (x - self.left_margin) / self.px_per_sec
@@ -521,8 +538,32 @@ class TimelineCanvas:
         x = self.canvas.canvasx(event.x)
         y = self.canvas.canvasy(event.y)
         
-        # Loop region selection
-        if self.loop_selection_start is not None and (event.state & 0x0001):
+        # Drag loop marker
+        if self.dragging_loop_marker is not None:
+            self._handle_loop_marker_drag(x)
+            return
+        
+        # Loop region selection with Shift
+        if self.loop_selection_start is not None:
+            # Disegna preview del loop durante il drag
+            self.canvas.delete("loop_preview")
+            
+            end_time = (x - self.left_margin) / self.px_per_sec
+            end_time = max(0, end_time)
+            
+            start_time = self.loop_selection_start
+            
+            # Visualizza l'area che sarà selezionata
+            loop_x_start = self.left_margin + min(start_time, end_time) * self.px_per_sec
+            loop_x_end = self.left_margin + max(start_time, end_time) * self.px_per_sec
+            
+            height = self.compute_height()
+            self.canvas.create_rectangle(
+                loop_x_start, self.ruler_height,
+                loop_x_end, height,
+                fill="#10b981", stipple="gray25", outline="#10b981",
+                width=2, tags="loop_preview"
+            )
             return
         
         if self.resize_data:
@@ -532,8 +573,16 @@ class TimelineCanvas:
 
     def on_release(self, event):
         """Handle mouse release."""
+        # Release loop marker drag
+        if self.dragging_loop_marker is not None:
+            self.dragging_loop_marker = None
+            self.canvas.config(cursor="")
+            return
+        
         # Check loop region selection
         if self.loop_selection_start is not None:
+            self.canvas.delete("loop_preview")
+            
             x = self.canvas.canvasx(event.x)
             end_time = (x - self.left_margin) / self.px_per_sec
             end_time = max(0, end_time)
@@ -541,10 +590,13 @@ class TimelineCanvas:
             start = self.snap_time(min(self.loop_selection_start, end_time))
             end = self.snap_time(max(self.loop_selection_start, end_time))
             
+            # Minimo di 0.1 secondi per il loop
             if abs(end - start) > 0.1 and self.player is not None:
                 self.player.set_loop(True, start, end)
                 self.redraw()
-                print(f"Loop region set: {start:.3f}s - {end:.3f}s")
+                print(f"🔁 Loop region set: {start:.3f}s - {end:.3f}s")
+            else:
+                print("⚠ Loop region too small (min 0.1s required)")
             
             self.loop_selection_start = None
             return
@@ -554,11 +606,16 @@ class TimelineCanvas:
 
     def on_motion(self, event):
         """Handle mouse motion for cursor changes."""
-        if self.canvas is None or self.drag_data or self.resize_data:
+        if self.canvas is None or self.drag_data or self.resize_data or self.dragging_loop_marker:
             return
             
         x = self.canvas.canvasx(event.x)
         y = self.canvas.canvasy(event.y)
+        
+        # Check if hovering over loop markers
+        if self._is_over_loop_marker(x, y):
+            self.canvas.config(cursor="sb_h_double_arrow")
+            return
         
         clicked_clip = self._find_clip_at(x, y)
         
@@ -666,3 +723,74 @@ class TimelineCanvas:
             return f"#{r:02x}{g:02x}{b:02x}"
         except Exception:
             return "#60a5fa"
+
+    def _check_loop_marker_click(self, x, y):
+        """Check if click is on a loop marker and start dragging."""
+        if self.player is None or y > self.ruler_height + 30:
+            return False
+        
+        try:
+            loop_enabled, loop_start, loop_end = self.player.get_loop()
+            if not loop_enabled:
+                return False
+            
+            loop_x_start = self.left_margin + loop_start * self.px_per_sec
+            loop_x_end = self.left_margin + loop_end * self.px_per_sec
+            
+            # Check click on start marker (15px tolerance)
+            if abs(x - loop_x_start) < 15:
+                self.dragging_loop_marker = "start"
+                self.canvas.config(cursor="sb_h_double_arrow")
+                return True
+            
+            # Check click on end marker
+            if abs(x - loop_x_end) < 15:
+                self.dragging_loop_marker = "end"
+                self.canvas.config(cursor="sb_h_double_arrow")
+                return True
+        except Exception:
+            pass
+        
+        return False
+
+    def _is_over_loop_marker(self, x, y):
+        """Check if mouse is over a loop marker."""
+        if self.player is None or y > self.ruler_height + 30:
+            return False
+        
+        try:
+            loop_enabled, loop_start, loop_end = self.player.get_loop()
+            if not loop_enabled:
+                return False
+            
+            loop_x_start = self.left_margin + loop_start * self.px_per_sec
+            loop_x_end = self.left_margin + loop_end * self.px_per_sec
+            
+            return abs(x - loop_x_start) < 15 or abs(x - loop_x_end) < 15
+        except Exception:
+            return False
+
+    def _handle_loop_marker_drag(self, x):
+        """Handle dragging of loop markers."""
+        if self.player is None:
+            return
+        
+        new_time = (x - self.left_margin) / self.px_per_sec
+        new_time = max(0, new_time)
+        new_time = self.snap_time(new_time)
+        
+        try:
+            loop_enabled, loop_start, loop_end = self.player.get_loop()
+            
+            if self.dragging_loop_marker == "start":
+                # Dragging start marker
+                if new_time < loop_end - 0.1:  # Minimum 0.1s loop
+                    self.player.set_loop(True, new_time, loop_end)
+                    self.redraw()
+            elif self.dragging_loop_marker == "end":
+                # Dragging end marker
+                if new_time > loop_start + 0.1:  # Minimum 0.1s loop
+                    self.player.set_loop(True, loop_start, new_time)
+                    self.redraw()
+        except Exception as e:
+            print(f"Error dragging loop marker: {e}")

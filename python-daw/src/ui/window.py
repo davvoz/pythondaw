@@ -123,6 +123,10 @@ class MainWindow:
         
         self._toolbar_manager = ToolbarManager(self._root, self.project, callbacks)
         self._toolbar_manager.build_toolbar()
+        
+        # Show hint for loop selection in status bar after a brief delay
+        if self._root and self._status:
+            self._root.after(1000, lambda: self._status.set("💡 Shift+Drag to set loop | Drag loop markers to adjust"))
 
     def _setup_main_layout(self):
         """Setup the main layout with sidebar and timeline."""
@@ -268,12 +272,27 @@ class MainWindow:
         
         enabled = self._toolbar_manager.get_loop_enabled()
         loop_info = self.player.get_loop()
-        self.player.set_loop(enabled, loop_info[1], loop_info[2])
         
+        # Se il loop viene attivato ma i punti sono invalidi, imposta valori di default
+        if enabled and loop_info[1] >= loop_info[2]:
+            # Imposta loop da posizione corrente a 4 secondi dopo
+            current = self.player.get_current_time()
+            self.player.set_loop(True, current, current + 4.0)
+            loop_start, loop_end = current, current + 4.0
+        else:
+            self.player.set_loop(enabled, loop_info[1], loop_info[2])
+            loop_start, loop_end = loop_info[1], loop_info[2]
+        
+        # Aggiorna UI
         if self._timeline_canvas:
             self._timeline_canvas.redraw()
         
-        status = "Loop ON" if enabled else "Loop OFF"
+        # Feedback visivo migliorato
+        if enabled:
+            status = f"🔁 Loop ON [{loop_start:.2f}s - {loop_end:.2f}s]"
+        else:
+            status = "Loop OFF"
+        
         if self._status:
             self._status.set(status)
         print(status)
@@ -283,16 +302,42 @@ class MainWindow:
         if self.player is None:
             return
         
+        # Usa la posizione corrente del playback
         current_time = self.player.get_current_time()
         if self._timeline_canvas:
             current_time = self._timeline_canvas.snap_time(current_time)
         
+        # Ottieni il loop attuale
         loop_info = self.player.get_loop()
-        self.player.set_loop(loop_info[0], current_time, loop_info[2])
+        loop_enabled, loop_start, loop_end = loop_info
+        
+        # Se il loop non è configurato o ha valori invalidi, crea uno nuovo
+        if not loop_enabled or loop_start >= loop_end:
+            # Crea un loop di 4 secondi dalla posizione corrente
+            new_start = current_time
+            new_end = current_time + 4.0
+        else:
+            # Modifica solo il punto di inizio, mantieni la fine
+            new_start = current_time
+            new_end = loop_end
+            
+            # Se il nuovo inizio è dopo la fine, sposta la fine
+            if new_start >= new_end:
+                new_end = new_start + 0.5
+        
+        self.player.set_loop(True, new_start, new_end)
+        
+        # Aggiorna checkbox
+        if self._toolbar_manager:
+            self._toolbar_manager.set_loop_enabled(True)
         
         if self._timeline_canvas:
             self._timeline_canvas.redraw()
-        print(f"Loop start set to {current_time:.3f}s")
+        
+        status = f"🔁 Loop start set: {new_start:.3f}s (end: {new_end:.3f}s)"
+        if self._status:
+            self._status.set(status)
+        print(status)
 
     def _set_loop_end(self):
         """Set loop end to current playback position."""
@@ -304,11 +349,25 @@ class MainWindow:
             current_time = self._timeline_canvas.snap_time(current_time)
         
         loop_info = self.player.get_loop()
-        self.player.set_loop(loop_info[0], loop_info[1], current_time)
+        loop_start = loop_info[1]
+        
+        # Assicura che end sia sempre dopo start
+        if current_time <= loop_start:
+            loop_start = max(0, current_time - 1.0)
+        
+        self.player.set_loop(True, loop_start, current_time)
+        
+        # Aggiorna checkbox se necessario
+        if self._toolbar_manager:
+            self._toolbar_manager.set_loop_enabled(True)
         
         if self._timeline_canvas:
             self._timeline_canvas.redraw()
-        print(f"Loop end set to {current_time:.3f}s")
+        
+        status = f"🔁 Loop end: {loop_start:.3f}s → {current_time:.3f}s"
+        if self._status:
+            self._status.set(status)
+        print(status)
 
     def _on_bpm_change(self):
         """Update project BPM and adjust loop points."""

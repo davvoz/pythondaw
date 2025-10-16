@@ -86,25 +86,15 @@ class ToolbarManager:
     def _build_loop_controls(self):
         """Build loop controls."""
         self.loop_var = tk.BooleanVar(value=False)
+        
+        # Solo checkbox loop - i marker si trascinano sulla timeline
         loop_check = ttk.Checkbutton(
-            self.toolbar, text="Loop",
+            self.toolbar, text="🔁 Loop",
             variable=self.loop_var,
             command=self.callbacks.get('loop_toggle', lambda: None),
             style="Tool.TButton"
         )
-        loop_check.pack(side="left", padx=(0, 4))
-        
-        ttk.Button(
-            self.toolbar, text="[",
-            command=self.callbacks.get('loop_start', lambda: None),
-            style="Tool.TButton", width=3
-        ).pack(side="left", padx=2)
-        
-        ttk.Button(
-            self.toolbar, text="]",
-            command=self.callbacks.get('loop_end', lambda: None),
-            style="Tool.TButton", width=3
-        ).pack(side="left", padx=(2, 8))
+        loop_check.pack(side="left", padx=(0, 8))
 
     def _build_tempo_controls(self):
         """Build tempo and grid controls."""
