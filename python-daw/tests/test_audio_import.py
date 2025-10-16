@@ -1,12 +1,26 @@
-"""Test script for audio import functionality."""
+"""Test script for audio import functionality.
+
+Pytest-friendly: when running under pytest, set environment variable
+TEST_AUDIO_FILE to a valid audio file path to enable file-based tests.
+Otherwise, these tests will be skipped.
+"""
 
 import os
 import sys
+import pytest
 
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from src.utils.audio_io import get_supported_formats, get_audio_info, load_audio_file
+
+
+@pytest.fixture
+def file_path():
+    path = os.environ.get("TEST_AUDIO_FILE")
+    if not path or not os.path.exists(path):
+        pytest.skip("No TEST_AUDIO_FILE provided; skipping audio file tests.")
+    return path
 
 
 def test_supported_formats():

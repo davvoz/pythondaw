@@ -848,16 +848,9 @@ class MainWindow:
         
         track_idx, clip = selected
         
-        from src.audio.clip import AudioClip
-        new_clip = AudioClip(
-            f"{clip.name} (copy)",
-            clip.buffer,
-            clip.sample_rate,
-            clip.end_time + 0.1,
-            duration=clip.duration,
-            color=clip.color,
-            file_path=clip.file_path
-        )
+        # Create cloned clip carrying all editing properties
+        new_start = clip.end_time + 0.1
+        new_clip = self._clone_clip(clip, new_start, name=f"{clip.name} (copy)")
         
         self.timeline.add_clip(track_idx, new_clip)
         self._timeline_canvas.select_clip(track_idx, new_clip)
@@ -893,7 +886,6 @@ class MainWindow:
             loop_duration = loop_end - loop_start
             
             # Duplicate each clip
-            from src.audio.clip import AudioClip
             duplicated_count = 0
             
             for track_idx, clip in clips_in_loop:
@@ -903,16 +895,8 @@ class MainWindow:
                 # Calculate new start time (right after the loop end)
                 new_start_time = loop_end + clip_offset_from_loop_start
                 
-                # Create duplicated clip
-                new_clip = AudioClip(
-                    clip.name,
-                    clip.buffer,
-                    clip.sample_rate,
-                    new_start_time,
-                    duration=clip.duration,
-                    color=clip.color,
-                    file_path=clip.file_path
-                )
+                # Clone clip with all properties (trim/fades/pitch/color/file_path/duration)
+                new_clip = self._clone_clip(clip, new_start_time)
                 
                 self.timeline.add_clip(track_idx, new_clip)
                 duplicated_count += 1
@@ -933,18 +917,61 @@ class MainWindow:
                 self._status.set(f"⚠ Error duplicating loop: {e}")
             print(f"Error duplicating loop: {e}")
 
-    def _show_clip_properties(self):
-        """Show clip properties dialog."""
-        if not self._timeline_canvas or messagebox is None:
-            return
+    def _clone_clip(self, clip, new_start_time: float, name=None):
+        """Create a new AudioClip copying all user-editable properties.
         
+        Args:
+            clip: Source AudioClip to clone
+            new_start_time: Start time for the new clip
+            name: Optional name override (defaults to source clip name)
+            
+        Returns:
+            New AudioClip with all properties copied
+        """
+        from src.audio.clip import AudioClip
+        
+        new_clip = AudioClip(
+            name or clip.name,
+            clip.buffer,
+            clip.sample_rate,
+            new_start_time,
+            duration=clip.duration,
+            color=clip.color,
+            file_path=clip.file_path,
+        )
+        
+        # Copy editing properties (trim, fades, pitch)
+        new_clip.start_offset = getattr(clip, 'start_offset', 0.0)
+        new_clip.end_offset = getattr(clip, 'end_offset', 0.0)
+        new_clip.fade_in = getattr(clip, 'fade_in', 0.0)
+        new_clip.fade_in_shape = getattr(clip, 'fade_in_shape', 'linear')
+        new_clip.fade_out = getattr(clip, 'fade_out', 0.0)
+        new_clip.fade_out_shape = getattr(clip, 'fade_out_shape', 'linear')
+        new_clip.pitch_semitones = getattr(clip, 'pitch_semitones', 0.0)
+        
+        return new_clip
+
+    def _show_clip_properties(self):
+        """Open Clip Inspector to edit clip parameters (trim/fade/pitch)."""
+        if not self._timeline_canvas:
+            return
+
         selected = self._timeline_canvas.get_selected_clip()
         if not selected:
             return
-        
+
         track_idx, clip = selected
-        
-        props = f"""Clip Properties
+
+        try:
+            from .clip_inspector import show_clip_inspector
+        except Exception:
+            show_clip_inspector = None
+
+        if show_clip_inspector is None or self._root is None:
+            # Fallback: simple message box with info
+            if messagebox is None:
+                return
+            props = f"""Clip Properties
 
 Name: {clip.name}
 Start Time: {clip.start_time:.3f} s
@@ -953,10 +980,17 @@ Duration: {clip.length_seconds:.3f} s
 Sample Rate: {clip.sample_rate} Hz
 Samples: {len(clip.buffer)}
 """
-        if clip.file_path:
-            props += f"\nSource: {clip.file_path}"
-        
-        messagebox.showinfo("Clip Properties", props)
+            if clip.file_path:
+                props += f"\nSource: {clip.file_path}"
+            messagebox.showinfo("Clip Properties", props)
+            return
+
+        def on_apply(_clip):
+            # Redraw timeline to reflect changes (length/peaks)
+            if self._timeline_canvas:
+                self._timeline_canvas.redraw()
+
+        show_clip_inspector(self._root, clip, on_apply=on_apply)
 
     # Lifecycle methods
     def run(self):
