@@ -45,6 +45,9 @@ class MainWindow:
         # Update jobs
         self._time_job = None
         self._meter_job = None
+        
+        # Recent files tracking
+        self._recent_files = []  # List of recently imported files
 
     def show(self):
         """Show the main window."""
@@ -94,6 +97,9 @@ class MainWindow:
         """Setup the menu bar using MenuManager."""
         callbacks = {
             'import_audio': self._import_audio_dialog,
+            'browse_audio': self._browse_audio_files,
+            'get_recent_files': self._get_recent_files,
+            'import_recent': self._import_recent_file,
             'exit': self.close,
             'zoom_in': lambda: self._zoom(1.25),
             'zoom_out': lambda: self._zoom(0.8),
@@ -507,7 +513,7 @@ class MainWindow:
             self._status.set(f"✓ Clip added to {track_name}")
 
     def _import_audio_dialog(self):
-        """Import WAV file and add to selected track."""
+        """Import audio file (WAV, MP3, FLAC, OGG, etc.) and add to selected track."""
         if self.timeline is None or self.mixer is None or filedialog is None:
             return
         
@@ -518,57 +524,222 @@ class MainWindow:
             return
         
         try:
+            # Get supported formats from audio_io utility
+            from src.utils.audio_io import get_supported_formats, load_audio_file, get_audio_info
+            
+            filetypes = get_supported_formats()
+            
             file_path = filedialog.askopenfilename(
                 title="Import Audio",
-                filetypes=[("WAV files", "*.wav"), ("All files", "*.*")]
+                filetypes=filetypes
             )
             
             if not file_path:
                 return
             
+            # Show loading status
+            if self._status:
+                self._status.set("⏳ Loading audio file...")
+            
             try:
-                import soundfile as sf
-                import numpy as np
-                
-                data, sr = sf.read(file_path)
-                if len(data.shape) > 1:
-                    data = np.mean(data, axis=1)
-                
-                buffer = data.tolist()
-                
+                # Get file info first (fast)
                 import os
                 clip_name = os.path.splitext(os.path.basename(file_path))[0]
                 
+                try:
+                    info = get_audio_info(file_path)
+                    duration = info.get('duration', 0)
+                    original_sr = info.get('sample_rate', 44100)
+                    
+                    # Show info dialog for long files
+                    if duration > 60:  # More than 1 minute
+                        if messagebox:
+                            proceed = messagebox.askyesno(
+                                "Large File",
+                                f"File duration: {duration:.1f} seconds\n"
+                                f"Sample rate: {original_sr} Hz\n"
+                                f"This may take a moment to load.\n\n"
+                                f"Continue?"
+                            )
+                            if not proceed:
+                                if self._status:
+                                    self._status.set("● Ready")
+                                return
+                except Exception:
+                    pass  # Info not available, proceed anyway
+                
+                # Load the audio file
+                target_sr = 44100  # Standard sample rate for DAW
+                buffer, sr = load_audio_file(file_path, target_sr=target_sr)
+                
+                # Get current time for clip placement
                 cur = 0.0
                 try:
                     cur = float(getattr(self.player, "_current_time", 0.0))
                 except Exception:
                     pass
                 
+                # Create clip
                 from src.audio.clip import AudioClip
                 clip = AudioClip(clip_name, buffer, sr, start_time=cur, file_path=file_path)
                 
+                # Add to timeline
                 self.timeline.add_clip(track_idx, clip)
                 self._track_controls.populate_tracks(self.timeline)
                 if self._timeline_canvas:
                     self._timeline_canvas.redraw()
                 
+                # Success feedback
                 if self._status:
                     track_name = self.mixer.tracks[track_idx].get("name", f"Track {track_idx+1}")
-                    self._status.set(f"✓ Imported '{clip_name}' to {track_name} ({len(buffer)} samples)")
+                    duration_str = f"{clip.length_seconds:.2f}s"
+                    size_mb = len(buffer) * 4 / (1024 * 1024)  # Approximate size in MB
+                    self._status.set(
+                        f"✓ Imported '{clip_name}' to {track_name} "
+                        f"({duration_str}, {sr}Hz, {size_mb:.1f}MB)"
+                    )
+                
+                print(f"✓ Successfully imported: {file_path}")
+                print(f"  - Duration: {clip.length_seconds:.2f}s")
+                print(f"  - Sample rate: {sr} Hz")
+                print(f"  - Samples: {len(buffer):,}")
                     
-            except ImportError:
+            except ImportError as e:
                 if messagebox:
                     messagebox.showerror(
                         "Import Error",
-                        "soundfile library not available.\nInstall with: pip install soundfile"
+                        f"Required audio library not available.\n\n{str(e)}\n\n"
+                        "Install with:\n"
+                        "  pip install soundfile\n"
+                        "or\n"
+                        "  pip install pydub"
                     )
+                if self._status:
+                    self._status.set("⚠ Audio library missing")
+                    
             except Exception as e:
                 if messagebox:
-                    messagebox.showerror("Import Error", f"Failed to load audio file:\n{str(e)}")
+                    messagebox.showerror(
+                        "Import Error",
+                        f"Failed to load audio file:\n\n{str(e)}\n\n"
+                        f"File: {os.path.basename(file_path)}"
+                    )
+                if self._status:
+                    self._status.set(f"⚠ Import failed: {str(e)}")
+                print(f"✗ Import error: {e}")
+                return
+            
+            # Add to recent files
+            self._add_to_recent_files(file_path)
                     
         except Exception as e:
-            print(f"Import error: {e}")
+            print(f"Import dialog error: {e}")
+            if self._status:
+                self._status.set("⚠ Import error")
+    
+    def _browse_audio_files(self):
+        """Open audio file browser."""
+        try:
+            from src.ui.audio_browser import AudioBrowser
+            
+            browser = AudioBrowser(
+                self._root,
+                on_file_selected=self._import_audio_file
+            )
+            browser.show()
+        except ImportError as e:
+            print(f"Audio browser not available: {e}")
+            # Fallback to standard dialog
+            self._import_audio_dialog()
+    
+    def _import_audio_file(self, file_path: str):
+        """Import a specific audio file (used by browser and drag-drop).
+        
+        Args:
+            file_path: Absolute path to audio file
+        """
+        if not self.timeline or not self.mixer:
+            return
+        
+        track_idx = self._track_controls.get_current_track_index()
+        if track_idx is None:
+            if self._status:
+                self._status.set("⚠ Select a track first")
+            return
+        
+        try:
+            from src.utils.audio_io import load_audio_file
+            import os
+            
+            if self._status:
+                self._status.set(f"⏳ Loading {os.path.basename(file_path)}...")
+            
+            # Load file
+            buffer, sr = load_audio_file(file_path, target_sr=44100)
+            
+            # Get clip name
+            clip_name = os.path.splitext(os.path.basename(file_path))[0]
+            
+            # Get current time
+            cur = 0.0
+            try:
+                cur = float(getattr(self.player, "_current_time", 0.0))
+            except Exception:
+                pass
+            
+            # Create and add clip
+            from src.audio.clip import AudioClip
+            clip = AudioClip(clip_name, buffer, sr, start_time=cur, file_path=file_path)
+            
+            self.timeline.add_clip(track_idx, clip)
+            self._track_controls.populate_tracks(self.timeline)
+            if self._timeline_canvas:
+                self._timeline_canvas.redraw()
+            
+            # Success feedback
+            if self._status:
+                track_name = self.mixer.tracks[track_idx].get("name", f"Track {track_idx+1}")
+                self._status.set(f"✓ Imported '{clip_name}' to {track_name}")
+            
+            print(f"✓ Imported: {file_path}")
+            
+            # Add to recent files
+            self._add_to_recent_files(file_path)
+            
+        except Exception as e:
+            if self._status:
+                self._status.set(f"⚠ Failed to import: {str(e)}")
+            print(f"✗ Import error: {e}")
+    
+    def _add_to_recent_files(self, file_path: str):
+        """Add file to recent files list."""
+        if file_path in self._recent_files:
+            self._recent_files.remove(file_path)
+        
+        self._recent_files.insert(0, file_path)
+        
+        # Keep only last 10
+        self._recent_files = self._recent_files[:10]
+    
+    def _get_recent_files(self):
+        """Get list of recent files."""
+        return self._recent_files
+    
+    def _import_recent_file(self, file_path: str):
+        """Import a file from recent files list."""
+        import os
+        if not os.path.exists(file_path):
+            if messagebox:
+                messagebox.showerror(
+                    "File Not Found",
+                    f"The file no longer exists:\n{file_path}"
+                )
+            # Remove from recent files
+            if file_path in self._recent_files:
+                self._recent_files.remove(file_path)
+            return
+        
+        self._import_audio_file(file_path)
 
     def _add_track_dialog(self):
         """Show dialog to add a new track."""
