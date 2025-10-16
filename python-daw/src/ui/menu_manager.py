@@ -28,6 +28,7 @@ class MenuManager:
         )
         
         self._build_file_menu()
+        self._build_edit_menu()
         self._build_view_menu()
         self._build_transport_menu()
         self._build_help_menu()
@@ -99,6 +100,27 @@ class MenuManager:
         )
         
         self.menubar.add_cascade(label="File", menu=file_menu)
+
+    def _build_edit_menu(self):
+        """Build Edit menu."""
+        edit_menu = tk.Menu(
+            self.menubar, tearoff=0, bg="#2d2d2d", fg="#f5f5f5",
+            activebackground="#3b82f6", activeforeground="#ffffff"
+        )
+        
+        edit_menu.add_command(
+            label="🔁 Duplicate Loop",
+            command=self.callbacks.get('duplicate_loop', lambda: None),
+            accelerator="Ctrl+D"
+        )
+        edit_menu.add_separator()
+        edit_menu.add_command(
+            label="Delete Selected",
+            command=self.callbacks.get('delete_clip', lambda: None),
+            accelerator="Del"
+        )
+        
+        self.menubar.add_cascade(label="Edit", menu=edit_menu)
 
     def _build_view_menu(self):
         """Build View menu."""

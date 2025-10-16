@@ -101,6 +101,8 @@ class MainWindow:
             'get_recent_files': self._get_recent_files,
             'import_recent': self._import_recent_file,
             'exit': self.close,
+            'duplicate_loop': self._duplicate_loop,
+            'delete_clip': self._delete_selected_clip,
             'zoom_in': lambda: self._zoom(1.25),
             'zoom_out': lambda: self._zoom(0.8),
             'zoom_reset': self._zoom_reset,
@@ -229,6 +231,7 @@ class MainWindow:
             self._root.bind('+', lambda e: self._zoom(1.25))
             self._root.bind('-', lambda e: self._zoom(0.8))
             self._root.bind('0', lambda e: self._zoom_reset())
+            self._root.bind('<Control-d>', lambda e: self._duplicate_loop())  # Ctrl+D to duplicate loop
         except Exception:
             pass
 
@@ -863,6 +866,72 @@ class MainWindow:
         
         if self._status:
             self._status.set(f"✓ Duplicated clip '{clip.name}'")
+
+    def _duplicate_loop(self):
+        """Duplicate all clips within the current loop region."""
+        if not self.player or not self.timeline:
+            if self._status:
+                self._status.set("⚠ No player or timeline available")
+            return
+        
+        try:
+            loop_enabled, loop_start, loop_end = self.player.get_loop()
+            
+            if not loop_enabled:
+                if self._status:
+                    self._status.set("⚠ Loop is not enabled. Set loop points first (Shift+drag on timeline)")
+                return
+            
+            # Get all clips in the loop region
+            clips_in_loop = list(self.timeline.get_clips_for_range(loop_start, loop_end))
+            
+            if not clips_in_loop:
+                if self._status:
+                    self._status.set("⚠ No clips found in loop region")
+                return
+            
+            loop_duration = loop_end - loop_start
+            
+            # Duplicate each clip
+            from src.audio.clip import AudioClip
+            duplicated_count = 0
+            
+            for track_idx, clip in clips_in_loop:
+                # Calculate offset from loop start
+                clip_offset_from_loop_start = clip.start_time - loop_start
+                
+                # Calculate new start time (right after the loop end)
+                new_start_time = loop_end + clip_offset_from_loop_start
+                
+                # Create duplicated clip
+                new_clip = AudioClip(
+                    clip.name,
+                    clip.buffer,
+                    clip.sample_rate,
+                    new_start_time,
+                    duration=clip.duration,
+                    color=clip.color,
+                    file_path=clip.file_path
+                )
+                
+                self.timeline.add_clip(track_idx, new_clip)
+                duplicated_count += 1
+            
+            # Update UI
+            if self._track_controls:
+                self._track_controls.populate_tracks(self.timeline)
+            if self._timeline_canvas:
+                self._timeline_canvas.redraw()
+            
+            if self._status:
+                self._status.set(f"✓ Duplicated loop region: {duplicated_count} clip(s) | {loop_start:.2f}s - {loop_end:.2f}s")
+            
+            print(f"🔁 Duplicated {duplicated_count} clips from loop region [{loop_start:.3f}s - {loop_end:.3f}s]")
+            
+        except Exception as e:
+            if self._status:
+                self._status.set(f"⚠ Error duplicating loop: {e}")
+            print(f"Error duplicating loop: {e}")
 
     def _show_clip_properties(self):
         """Show clip properties dialog."""

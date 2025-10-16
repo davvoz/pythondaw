@@ -9,6 +9,7 @@ This project is a scalable and object-oriented Digital Audio Workstation (DAW) b
 - **🎵 Multi-Format Audio Import**: Load WAV, MP3, FLAC, OGG, AAC, M4A files with automatic conversion
 - **Audio Browser**: Browse and preview audio files before importing
 - **Recent Files**: Quick access to recently imported audio files
+- **🔁 Loop Duplication**: Duplicate entire loop regions with a single keystroke (Ctrl+D)
 - **Audio Processing**: Apply various audio effects such as reverb, delay, compression, and equalization.
 - **MIDI Support**: Handle MIDI messages and sequences for instrument control.
 - **User Interface**: A simple and intuitive UI for managing playback and mixing.
@@ -126,6 +127,7 @@ For more examples, see the `examples/` directory.
 
 - **[Audio Import Guide](docs/AUDIO_IMPORT.md)** - Complete guide for importing audio files
 - **[Audio Import Summary](docs/AUDIO_IMPORT_SUMMARY.md)** - Technical details of the import system
+- **[Duplicate Loop](docs/DUPLICATE_LOOP.md)** - Guide for duplicating loop regions
 - **[Examples](examples/)** - Code examples and tutorials
 
 ## Testing
@@ -154,7 +156,15 @@ This project is licensed under the MIT License. See the LICENSE file for more de
 
 ## Recent Updates
 
-### ✨ Audio Import System (Latest)
+### 🔁 Loop Duplication Feature (Latest)
+- Duplicate entire loop regions with **Ctrl+D**
+- Preserves relative timing and clip positioning
+- Available via Edit menu or keyboard shortcut
+- Perfect for building arrangements and creating patterns
+
+See [docs/DUPLICATE_LOOP.md](docs/DUPLICATE_LOOP.md) for details.
+
+### ✨ Audio Import System
 - Multi-format support (WAV, MP3, FLAC, OGG, AAC, M4A)
 - Audio file browser with preview
 - Recent files tracking
