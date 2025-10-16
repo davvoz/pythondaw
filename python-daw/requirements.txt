@@ -1,0 +1,9 @@
+Flask==2.0.1
+numpy>=1.21.0
+scipy>=1.7.0
+pydub>=0.25.1
+soundfile>=0.10.3
+mido>=1.2.9
+pygame>=2.0.1
+# Optional for realtime playback
+sounddevice>=0.4.6
