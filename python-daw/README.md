@@ -5,6 +5,7 @@ This project is a scalable and object-oriented Digital Audio Workstation (DAW) b
 ## Features
 
 - **Project Management**: Create, save, and manage audio projects with multiple tracks.
+- **💾 Project Save/Load**: Save complete projects with audio samples and restore everything
 - **Track Handling**: Add and remove audio tracks, adjust volume, and manage audio data.
 - **🎵 Multi-Format Audio Import**: Load WAV, MP3, FLAC, OGG, AAC, M4A files with automatic conversion
 - **Audio Browser**: Browse and preview audio files before importing
@@ -111,22 +112,35 @@ The DAW supports multiple methods to import your audio files:
 ### Example Code
 
 ```python
-from src.utils.audio_io import load_audio_file, get_audio_info
+from src.core.project import Project
+from src.core.track import Track
+from src.audio.clip import AudioClip
+from src.utils.audio_io import load_audio_file
 
-# Get file information
-info = get_audio_info("my_sound.wav")
-print(f"Duration: {info['duration']:.2f}s")
-print(f"Sample rate: {info['sample_rate']}Hz")
+# Create a new project
+project = Project(name="My Song", bpm=128.0, time_signature=(4, 4))
 
-# Load audio file
-buffer, sample_rate = load_audio_file("my_sound.wav", target_sr=44100)
-print(f"Loaded {len(buffer)} samples")
+# Load and add audio
+buffer, sr = load_audio_file("kick.wav")
+clip = AudioClip("Kick", buffer, sr, start_time=0.0)
+
+track = Track()
+track.add_audio(clip)
+project.create_track(track)
+
+# Save the project (with separate audio files)
+project.save_project("my_song.daw", embed_audio=False)
+
+# Load the project later
+loaded_project = Project.load_project("my_song.daw")
+print(f"Loaded: {loaded_project.name} with {len(loaded_project.tracks)} tracks")
 ```
 
 For more examples, see the `examples/` directory.
 
 ## Documentation
 
+- **[Project Save/Load Guide](docs/PROJECT_SAVE_LOAD.md)** - Complete guide for saving and loading projects
 - **[Audio Import Guide](docs/AUDIO_IMPORT.md)** - Complete guide for importing audio files
 - **[Audio Import Summary](docs/AUDIO_IMPORT_SUMMARY.md)** - Technical details of the import system
 - **[Duplicate Loop](docs/DUPLICATE_LOOP.md)** - Guide for duplicating loop regions
@@ -159,7 +173,17 @@ This project is licensed under the MIT License. See the LICENSE file for more de
 
 ## Recent Updates
 
-### � Multi-Selection and Copy/Paste (Latest)
+### 💾 Project Save/Load System (Latest)
+- **Save complete projects** including all audio samples
+- **Two modes**: Separate files (recommended) or embedded audio
+- **Full property preservation**: All clip properties, fades, effects, etc.
+- **Smart file management**: Organized project structure with audio folder
+- **Format**: JSON + WAV files for maximum compatibility
+- **Easy backup**: Simple file-based project management
+
+See [docs/PROJECT_SAVE_LOAD.md](docs/PROJECT_SAVE_LOAD.md) for complete documentation.
+
+### 📋 Multi-Selection and Copy/Paste
 - **Multi-select clips** with **Ctrl+Click**
 - **Copy/paste clips** with **Ctrl+C / Ctrl+V**
 - **Copy/paste loop regions** with **Ctrl+Shift+C / Ctrl+Shift+V**

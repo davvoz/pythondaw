@@ -139,7 +139,10 @@ class TrackControls:
     def populate_tracks(self, timeline=None):
         """Populate track list from mixer."""
         if self.mixer is None or self.track_tree is None:
+            print(f"populate_tracks: mixer={self.mixer}, track_tree={self.track_tree}")
             return
+        
+        print(f"populate_tracks: Found {len(self.mixer.tracks)} tracks in mixer")
             
         # Clear existing items
         for item in self.track_tree.get_children():
@@ -154,8 +157,11 @@ class TrackControls:
             if timeline is not None:
                 try:
                     clips = timeline.count_clips_for_track(idx)
-                except Exception:
+                except Exception as e:
+                    print(f"  Error counting clips for track {idx}: {e}")
                     clips = 0
+            
+            print(f"  Inserting track {idx}: '{name}' with {clips} clips")
             
             self.track_tree.insert(
                 "", "end", iid=str(idx),
@@ -167,6 +173,8 @@ class TrackControls:
                 self.track_tree.tag_configure(f"t{idx}", foreground=color)
             except Exception:
                 pass
+        
+        print(f"populate_tracks: Tree now has {len(self.track_tree.get_children())} items")
     
     def get_current_track_index(self):
         """Get currently selected track index."""

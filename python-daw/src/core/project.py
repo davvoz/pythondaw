@@ -14,14 +14,28 @@ class Project:
         if track in self.tracks:
             self.tracks.remove(track)
 
-    def save_project(self, file_path):
-        with open(file_path, 'w') as file:
-            file.write(f'Project: {self.name}\n')
-            file.write(f'BPM: {self.bpm}\n')
-            file.write(f'Time Signature: {self.time_signature_num}/{self.time_signature_den}\n')
-            file.write('Tracks:\n')
-            for track in self.tracks:
-                file.write(f'- {track}\n')
+    def save_project(self, file_path, embed_audio=False):
+        """Save project with all data (tracks, clips, audio).
+        
+        Args:
+            file_path: Path to save the .daw project file
+            embed_audio: If True, embed audio in JSON. If False, save to separate files.
+        """
+        from ..utils.project_serializer import save_project as serialize_save
+        serialize_save(self, file_path, embed_audio)
+    
+    @staticmethod
+    def load_project(file_path):
+        """Load a project from file.
+        
+        Args:
+            file_path: Path to the .daw project file
+            
+        Returns:
+            Loaded Project instance
+        """
+        from ..utils.project_serializer import load_project as serialize_load
+        return serialize_load(file_path)
 
     def get_beat_duration(self) -> float:
         """Return duration of one beat in seconds."""

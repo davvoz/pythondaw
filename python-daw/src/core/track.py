@@ -7,9 +7,10 @@ class Track:
     - Volume clamped between 0.0 and 1.0 via set_volume
     """
 
-    def __init__(self):
+    def __init__(self, name: str = None):
         self.audio_files = []
         self.volume = 1.0
+        self.name = name  # Optional track name
 
     def add_audio(self, audio_file):
         self.audio_files.append(audio_file)

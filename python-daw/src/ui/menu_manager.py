@@ -44,18 +44,24 @@ class MenuManager:
         
         file_menu.add_command(
             label="New Project",
-            command=lambda: None,
+            command=self.callbacks.get('new_project', lambda: None),
             accelerator="Ctrl+N"
         )
         file_menu.add_command(
             label="Open Project...",
-            command=lambda: None,
+            command=self.callbacks.get('open_project', lambda: None),
             accelerator="Ctrl+O"
         )
+        file_menu.add_separator()
         file_menu.add_command(
             label="Save Project",
-            command=lambda: None,
+            command=self.callbacks.get('save_project', lambda: None),
             accelerator="Ctrl+S"
+        )
+        file_menu.add_command(
+            label="Save Project As...",
+            command=self.callbacks.get('save_project_as', lambda: None),
+            accelerator="Ctrl+Shift+S"
         )
         file_menu.add_separator()
         file_menu.add_command(

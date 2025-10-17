@@ -48,6 +48,9 @@ class MainWindow:
         
         # Recent files tracking
         self._recent_files = []  # List of recently imported files
+        
+        # Project file tracking
+        self._project_file_path = None  # Current project file path
 
     def show(self):
         """Show the main window."""
@@ -98,6 +101,10 @@ class MainWindow:
     def _setup_menu(self):
         """Setup the menu bar using MenuManager."""
         callbacks = {
+            'new_project': self._new_project,
+            'open_project': self._open_project,
+            'save_project': self._save_project,
+            'save_project_as': self._save_project_as,
             'import_audio': self._import_audio_dialog,
             'browse_audio': self._browse_audio_files,
             'get_recent_files': self._get_recent_files,
@@ -230,6 +237,10 @@ class MainWindow:
             return
         try:
             self._root.bind('<space>', self._toggle_playback)
+            self._root.bind('<Control-n>', lambda e: self._new_project())  # Ctrl+N for New Project
+            self._root.bind('<Control-o>', lambda e: self._open_project())  # Ctrl+O for Open
+            self._root.bind('<Control-s>', lambda e: self._save_project())  # Ctrl+S for Save
+            self._root.bind('<Control-Shift-S>', lambda e: self._save_project_as())  # Ctrl+Shift+S for Save As
             self._root.bind('+', lambda e: self._zoom(1.25))
             self._root.bind('-', lambda e: self._zoom(0.8))
             self._root.bind('0', lambda e: self._zoom_reset())
@@ -799,7 +810,15 @@ class MainWindow:
             return
         
         track_name, color = result
+        # Add to mixer
         self.mixer.add_track(name=track_name, volume=1.0, pan=0.0, color=color)
+        
+        # Also add to project.tracks so it persists in save/load
+        from ..core.track import Track
+        track = Track(name=track_name)
+        track.set_volume(1.0)
+        self.project.create_track(track)
+        
         self._track_controls.populate_tracks(self.timeline)
         
         if self._timeline_canvas:
@@ -1189,6 +1208,260 @@ Samples: {len(clip.buffer)}
                 self._timeline_canvas.redraw()
 
         show_clip_inspector(self._root, clip, on_apply=on_apply)
+
+    # Project management methods
+    def _new_project(self):
+        """Create a new project."""
+        if messagebox is None:
+            return
+        
+        # Check if current project has unsaved changes (future enhancement)
+        result = messagebox.askyesno(
+            "New Project",
+            "Create a new project? Current project will be cleared."
+        )
+        
+        if not result:
+            return
+        
+        # Clear current project
+        if self.timeline:
+            # Remove all clips from timeline using Timeline's API
+            # Get all placements and remove them
+            all_clips = list(self.timeline.all_placements())
+            for track_idx, clip in all_clips:
+                self.timeline.remove_clip(track_idx, clip)
+        
+        # Reset project properties
+        self.project.name = "Untitled"
+        self.project.bpm = 120.0
+        self.project.time_signature_num = 4
+        self.project.time_signature_den = 4
+        
+        # Clear project file path
+        self._project_file_path = None
+        
+        # Update UI
+        if self._toolbar_manager:
+            self._toolbar_manager.bpm_var.set(120.0)
+        
+        if self._track_controls:
+            self._track_controls.populate_tracks(self.timeline)
+        
+        if self._timeline_canvas:
+            self._timeline_canvas.redraw()
+        
+        if self._status:
+            self._status.set("✓ New project created")
+        
+        self._root.title(f"{self.title} - Untitled")
+    
+    def _open_project(self):
+        """Open an existing project file."""
+        if filedialog is None:
+            return
+        
+        file_path = filedialog.askopenfilename(
+            title="Open Project",
+            filetypes=[
+                ("DAW Project", "*.daw"),
+                ("All Files", "*.*")
+            ]
+        )
+        
+        if not file_path:
+            return
+        
+        try:
+            if self._status:
+                self._status.set("⏳ Loading project...")
+            
+            # Load project
+            from src.core.project import Project
+            loaded_project = Project.load_project(file_path)
+            
+            # Replace current project
+            self.project.name = loaded_project.name
+            self.project.bpm = loaded_project.bpm
+            self.project.time_signature_num = loaded_project.time_signature_num
+            self.project.time_signature_den = loaded_project.time_signature_den
+            self.project.tracks = loaded_project.tracks
+            
+            # Update timeline - clear existing clips and add loaded ones
+            if self.timeline:
+                # Clear all existing clips from timeline
+                self.timeline._placements.clear()
+                
+                # Add all clips from loaded tracks to timeline using Timeline's API
+                for track_idx, track in enumerate(self.project.tracks):
+                    # Debug: print what we're loading
+                    print(f"  Track {track_idx}: {len(track.audio_files)} clip(s)")
+                    for clip in track.audio_files:
+                        print(f"    - {clip.name}: {clip.start_time}s, buffer={len(clip.buffer)} samples")
+                        # Add clip to timeline using proper API
+                        self.timeline.add_clip(track_idx, clip)
+            
+            # Stop player if running and reset position
+            if self.player:
+                was_playing = self.player.is_playing()
+                if was_playing:
+                    self.player.stop()
+                # Reset playback position
+                self.player.set_current_time(0.0)
+            
+            # Update mixer
+            if self.mixer:
+                # Clear existing tracks
+                while self.mixer.get_track_count() > 0:
+                    self.mixer.tracks.pop()
+                
+                print(f"Loading {len(self.project.tracks)} tracks into mixer...")
+                
+                # Add loaded tracks (from project.tracks which are Track objects)
+                for idx, track in enumerate(self.project.tracks):
+                    track_name = getattr(track, 'name', None) or f"Track {idx + 1}"
+                    print(f"  Adding mixer track {idx}: '{track_name}' (volume={track.volume})")
+                    self.mixer.add_track(
+                        name=track_name,
+                        volume=track.volume,
+                        pan=0.0
+                    )
+                
+                print(f"Mixer now has {self.mixer.get_track_count()} tracks")
+            
+            # Update UI
+            if self._toolbar_manager:
+                self._toolbar_manager.bpm_var.set(self.project.bpm)
+            
+            if self._track_controls:
+                print("Calling populate_tracks...")
+                self._track_controls.populate_tracks(self.timeline)
+                print("populate_tracks completed")
+            
+            if self._timeline_canvas:
+                self._timeline_canvas.redraw()
+            
+            # Save project file path
+            self._project_file_path = file_path
+            
+            # Update window title
+            import os
+            project_name = os.path.basename(file_path)
+            self._root.title(f"{self.title} - {project_name}")
+            
+            if self._status:
+                track_count = len(self.project.tracks)
+                clip_count = sum(len(track.audio_files) for track in self.project.tracks)
+                self._status.set(
+                    f"✓ Loaded '{self.project.name}' - "
+                    f"{track_count} track(s), {clip_count} clip(s)"
+                )
+            
+            print(f"✓ Project loaded: {file_path}")
+            
+        except Exception as e:
+            if messagebox:
+                messagebox.showerror(
+                    "Load Error",
+                    f"Failed to load project:\n\n{str(e)}"
+                )
+            if self._status:
+                self._status.set(f"⚠ Failed to load project: {str(e)}")
+            print(f"✗ Load error: {e}")
+    
+    def _save_project(self):
+        """Save the current project."""
+        if self._project_file_path:
+            # Save to existing file
+            self._do_save_project(self._project_file_path)
+        else:
+            # No file path yet, do Save As
+            self._save_project_as()
+    
+    def _save_project_as(self):
+        """Save the current project with a new name."""
+        if filedialog is None:
+            return
+        
+        file_path = filedialog.asksaveasfilename(
+            title="Save Project As",
+            defaultextension=".daw",
+            filetypes=[
+                ("DAW Project", "*.daw"),
+                ("All Files", "*.*")
+            ]
+        )
+        
+        if not file_path:
+            return
+        
+        self._do_save_project(file_path)
+        self._project_file_path = file_path
+        
+        # Update window title
+        import os
+        project_name = os.path.basename(file_path)
+        self._root.title(f"{self.title} - {project_name}")
+    
+    def _do_save_project(self, file_path: str):
+        """Perform the actual save operation.
+        
+        Args:
+            file_path: Path to save the project file
+        """
+        try:
+            if self._status:
+                self._status.set("⏳ Saving project...")
+            
+            # Sync data from timeline and mixer to project tracks before saving
+            if self.mixer and self.timeline:
+                # Iterate over all tracks (use the count from mixer since it's the UI source of truth)
+                for i in range(len(self.mixer.tracks)):
+                    mixer_track = self.mixer.tracks[i]
+                    
+                    # Ensure project has corresponding track
+                    if i >= len(self.project.tracks):
+                        # Track exists in mixer but not in project - this shouldn't happen with the fix,
+                        # but handle it gracefully by skipping
+                        print(f"Warning: Track {i} exists in mixer but not in project")
+                        continue
+                    
+                    project_track = self.project.tracks[i]
+                    
+                    # Sync track name from mixer
+                    project_track.name = mixer_track.get("name", f"Track {i + 1}")
+                    
+                    # Sync clips from timeline to track using Timeline's API
+                    project_track.audio_files = []
+                    clips = self.timeline.get_clips_for_track(i)
+                    for clip in clips:
+                        project_track.audio_files.append(clip)
+                    print(f"Syncing track {i}: '{project_track.name}' with {len(project_track.audio_files)} clips")
+            
+            # Save project (default to separate audio files for better performance)
+            self.project.save_project(file_path, embed_audio=False)
+            
+            if self._status:
+                import os
+                size = os.path.getsize(file_path) / 1024  # KB
+                track_count = len(self.project.tracks)
+                clip_count = sum(len(track.audio_files) for track in self.project.tracks)
+                self._status.set(
+                    f"✓ Saved '{os.path.basename(file_path)}' - "
+                    f"{track_count} track(s), {clip_count} clip(s) ({size:.1f} KB)"
+                )
+            
+            print(f"✓ Project saved: {file_path}")
+            
+        except Exception as e:
+            if messagebox:
+                messagebox.showerror(
+                    "Save Error",
+                    f"Failed to save project:\n\n{str(e)}"
+                )
+            if self._status:
+                self._status.set(f"⚠ Failed to save project: {str(e)}")
+            print(f"✗ Save error: {e}")
 
     # Lifecycle methods
     def run(self):

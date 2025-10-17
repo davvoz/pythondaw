@@ -17,14 +17,12 @@ def main():
     # Initialize the project
     project = Project("Demo Project")
 
-    # Demo: add a couple of tracks and files
-    track1 = Track()
-    track1.add_audio("kick.wav")
+    # Demo: add a couple of tracks (empty for now, clips will be added via UI)
+    track1 = Track(name="Track 1")
     track1.set_volume(0.7)
     project.create_track(track1)
 
-    track2 = Track()
-    track2.add_audio("snare.wav")
+    track2 = Track(name="Track 2")
     track2.set_volume(0.3)
     project.create_track(track2)
 
