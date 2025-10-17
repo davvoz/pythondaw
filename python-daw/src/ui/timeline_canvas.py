@@ -50,6 +50,10 @@ class TimelineCanvas:
         # Loop marker dragging
         self.dragging_loop_marker = None  # "start" or "end"
         
+        # Box selection (rectangular selection)
+        self.box_selection_start = None  # (x, y) start point of box selection
+        self.box_selection_rect = None  # Canvas rectangle ID for visual feedback
+        
         self._build_canvas(parent)
 
     def _build_canvas(self, parent):
@@ -600,8 +604,13 @@ class TimelineCanvas:
             if not ctrl_pressed:
                 self.clear_selection()
             
-            # Set paste position if clipboard has content
-            if self.clipboard and y > self.ruler_height:
+            # Start box selection if in track area (not in ruler)
+            if y > self.ruler_height:
+                self.box_selection_start = (x, y)
+                # Don't set paste position during box selection start
+            
+            # Set paste position if clipboard has content (only if not starting box selection)
+            elif self.clipboard:
                 time = (x - self.left_margin) / self.px_per_sec
                 self.paste_position = max(0, self.snap_time(time))
                 self.paste_cursor_visible = True
@@ -648,6 +657,11 @@ class TimelineCanvas:
             )
             return
         
+        # Box selection (rectangular clip selection)
+        if self.box_selection_start is not None:
+            self._handle_box_selection_drag(x, y)
+            return
+        
         if self.resize_data:
             self._handle_resize(x)
         elif self.drag_data:
@@ -681,6 +695,11 @@ class TimelineCanvas:
                 print("⚠ Loop region too small (min 0.1s required)")
             
             self.loop_selection_start = None
+            return
+        
+        # Box selection release
+        if self.box_selection_start is not None:
+            self._complete_box_selection()
             return
         
         self.drag_data = None
@@ -769,6 +788,70 @@ class TimelineCanvas:
             self.drag_data["track"] = track_idx
             self.selected_clip = (track_idx, clip)
         
+        self.redraw()
+
+    def _handle_box_selection_drag(self, x, y):
+        """Handle dragging for box selection."""
+        if self.box_selection_start is None:
+            return
+        
+        start_x, start_y = self.box_selection_start
+        
+        # Calculate rectangle bounds
+        x1 = min(start_x, x)
+        y1 = min(start_y, y)
+        x2 = max(start_x, x)
+        y2 = max(start_y, y)
+        
+        # Delete previous selection rectangle
+        if self.box_selection_rect is not None:
+            self.canvas.delete(self.box_selection_rect)
+        
+        # Draw selection rectangle
+        self.box_selection_rect = self.canvas.create_rectangle(
+            x1, y1, x2, y2,
+            outline="#60a5fa", width=2, dash=(4, 4),
+            fill="#3b82f6", stipple="gray25",
+            tags="box_selection"
+        )
+    
+    def _complete_box_selection(self):
+        """Complete box selection and select all clips within the box."""
+        if self.box_selection_start is None:
+            return
+        
+        # Get the current mouse position from the box rectangle
+        if self.box_selection_rect is not None:
+            coords = self.canvas.coords(self.box_selection_rect)
+            if len(coords) == 4:
+                x1, y1, x2, y2 = coords
+                
+                # Find all clips that intersect with the selection box
+                selected = []
+                
+                if self.timeline is not None:
+                    for track_idx, clip in self.timeline.all_placements():
+                        clip_x1 = self.left_margin + clip.start_time * self.px_per_sec
+                        clip_x2 = self.left_margin + clip.end_time * self.px_per_sec
+                        clip_y1 = self.ruler_height + track_idx * self.track_height
+                        clip_y2 = clip_y1 + self.track_height
+                        
+                        # Check if clip intersects with selection box
+                        if (clip_x2 >= x1 and clip_x1 <= x2 and 
+                            clip_y2 >= y1 and clip_y1 <= y2):
+                            selected.append((track_idx, clip))
+                
+                # Update selection
+                if selected:
+                    self.selected_clips = selected
+                    self.selected_clip = selected[0] if selected else None
+                    print(f"📦 Selected {len(selected)} clip(s) with box selection")
+            
+            # Clean up
+            self.canvas.delete(self.box_selection_rect)
+            self.box_selection_rect = None
+        
+        self.box_selection_start = None
         self.redraw()
 
     def select_clip(self, track_idx, clip):
