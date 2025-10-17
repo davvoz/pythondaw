@@ -43,9 +43,11 @@ class TimelinePlayer:
             print("TimelinePlayer: sounddevice/numpy not available. Real-time playback disabled.")
             return
         with self._lock:
-            self._current_time = float(start_time)
+            # Protection: if already playing, ignore the request
             if self._playing:
+                print("TimelinePlayer: Already playing, ignoring start request.")
                 return
+            self._current_time = float(start_time)
             self._stream = sd.OutputStream(
                 samplerate=self.sample_rate,
                 channels=2,

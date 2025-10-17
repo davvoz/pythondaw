@@ -266,6 +266,12 @@ class MainWindow:
     # Transport control methods
     def _on_play(self):
         """Handle play button."""
+        # Protection: check if already playing before starting
+        if self.player is not None and hasattr(self.player, "is_playing"):
+            if self.player.is_playing():
+                print("Window: Already playing, ignoring play request.")
+                return
+        
         if self.transport is not None:
             try:
                 self.transport.play()

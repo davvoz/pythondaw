@@ -4,9 +4,12 @@ class Transport:
         self.is_recording = False
 
     def play(self):
-        if not self.is_playing:
-            self.is_playing = True
-            print("Playback started.")
+        # Protection: ignore if already playing
+        if self.is_playing:
+            print("Transport: Already playing, ignoring play request.")
+            return
+        self.is_playing = True
+        print("Playback started.")
 
     def stop(self):
         if self.is_playing:
