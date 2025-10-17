@@ -58,6 +58,7 @@ class TestClipPropertiesDuplication(unittest.TestCase):
         source_clip.fade_out = 0.4
         source_clip.fade_out_shape = "log"
         source_clip.pitch_semitones = 2.5
+        source_clip.volume = 0.75
         
         # Clone the clip
         cloned_clip = window._clone_clip(source_clip, new_start_time=5.0)
@@ -79,6 +80,7 @@ class TestClipPropertiesDuplication(unittest.TestCase):
         self.assertEqual(cloned_clip.fade_out, 0.4)
         self.assertEqual(cloned_clip.fade_out_shape, "log")
         self.assertEqual(cloned_clip.pitch_semitones, 2.5)
+        self.assertEqual(cloned_clip.volume, 0.75)
 
     def test_clone_clip_with_custom_name(self):
         """Test that _clone_clip accepts custom name."""
@@ -126,6 +128,7 @@ class TestClipPropertiesDuplication(unittest.TestCase):
         self.assertEqual(cloned_clip.fade_out, 0.0)
         self.assertEqual(cloned_clip.fade_out_shape, 'linear')
         self.assertEqual(cloned_clip.pitch_semitones, 0.0)
+        self.assertEqual(cloned_clip.volume, 1.0)
 
     def test_duplicate_loop_preserves_properties(self):
         """Test that duplicating loop region preserves all clip properties."""
@@ -141,6 +144,7 @@ class TestClipPropertiesDuplication(unittest.TestCase):
         clip.fade_out = 0.25
         clip.fade_out_shape = "exp"
         clip.pitch_semitones = -3.0
+        clip.volume = 1.5
         
         self.timeline.add_clip(0, clip)
         
@@ -178,6 +182,7 @@ class TestClipPropertiesDuplication(unittest.TestCase):
         self.assertEqual(duplicated_clip.fade_out, 0.25)
         self.assertEqual(duplicated_clip.fade_out_shape, "exp")
         self.assertEqual(duplicated_clip.pitch_semitones, -3.0)
+        self.assertEqual(duplicated_clip.volume, 1.5)
 
 
 if __name__ == "__main__":

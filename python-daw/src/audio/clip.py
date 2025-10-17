@@ -44,6 +44,9 @@ class AudioClip:
 
         # Pitch shift in semitones (simple resampling, tempo changes)
         self.pitch_semitones: float = 0.0
+        
+        # Volume control (0.0 to 2.0, where 1.0 is unity gain)
+        self.volume: float = 1.0
 
     @property
     def length_seconds(self) -> float:
@@ -189,6 +192,8 @@ class AudioClip:
                     clip_len = max(0.0, float(self.length_seconds))
                     phase_out = max(0.0, min(1.0, (clip_len - t_clip) / self.fade_out))
                     sample *= phase_out
+                # apply volume
+                sample *= float(self.volume)
                 out.append(sample)
             return out
 
@@ -213,6 +218,9 @@ class AudioClip:
 
         # apply fades relative to clip-local time
         y = self._apply_fades_np(y, seg_start_t=start_sec)
+        
+        # apply volume
+        y = y * float(self.volume)
 
         return y.astype(float).tolist()
     

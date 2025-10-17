@@ -948,6 +948,7 @@ class MainWindow:
         new_clip.fade_out = getattr(clip, 'fade_out', 0.0)
         new_clip.fade_out_shape = getattr(clip, 'fade_out_shape', 'linear')
         new_clip.pitch_semitones = getattr(clip, 'pitch_semitones', 0.0)
+        new_clip.volume = getattr(clip, 'volume', 1.0)
         
         return new_clip
 
