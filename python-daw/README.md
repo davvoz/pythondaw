@@ -10,6 +10,8 @@ This project is a scalable and object-oriented Digital Audio Workstation (DAW) b
 - **Audio Browser**: Browse and preview audio files before importing
 - **Recent Files**: Quick access to recently imported audio files
 - **🔁 Loop Duplication**: Duplicate entire loop regions with a single keystroke (Ctrl+D)
+- **📋 Multi-Selection & Copy/Paste**: Select multiple clips, copy and paste with full property preservation
+- **✂️ Advanced Clipboard**: Copy/paste individual clips or entire loop regions
 - **Audio Processing**: Apply various audio effects such as reverb, delay, compression, and equalization.
 - **MIDI Support**: Handle MIDI messages and sequences for instrument control.
 - **User Interface**: A simple and intuitive UI for managing playback and mixing.
@@ -128,6 +130,7 @@ For more examples, see the `examples/` directory.
 - **[Audio Import Guide](docs/AUDIO_IMPORT.md)** - Complete guide for importing audio files
 - **[Audio Import Summary](docs/AUDIO_IMPORT_SUMMARY.md)** - Technical details of the import system
 - **[Duplicate Loop](docs/DUPLICATE_LOOP.md)** - Guide for duplicating loop regions
+- **[Multi-Selection & Copy/Paste](docs/MULTI_SELECTION.md)** - Guide for multi-selection and clipboard operations
 - **[Examples](examples/)** - Code examples and tutorials
 
 ## Testing
@@ -156,7 +159,18 @@ This project is licensed under the MIT License. See the LICENSE file for more de
 
 ## Recent Updates
 
-### 🔁 Loop Duplication Feature (Latest)
+### � Multi-Selection and Copy/Paste (Latest)
+- **Multi-select clips** with **Ctrl+Click**
+- **Copy/paste clips** with **Ctrl+C / Ctrl+V**
+- **Copy/paste loop regions** with **Ctrl+Shift+C / Ctrl+Shift+V**
+- **Delete multiple clips** with **Delete** key
+- Context menu support for multi-selection
+- Full property preservation (fades, pitch, volume, trim, etc.)
+- Maintains relative timing when pasting multiple clips
+
+See [docs/MULTI_SELECTION.md](docs/MULTI_SELECTION.md) for details.
+
+### 🔁 Loop Duplication Feature
 - Duplicate entire loop regions with **Ctrl+D**
 - Preserves relative timing and clip positioning
 - Available via Edit menu or keyboard shortcut

@@ -81,9 +81,11 @@ class MainWindow:
         # Prepare context menu helper
         self._clip_menu = ClipContextMenu(
             self._root,
-            on_delete=self._delete_selected_clip,
+            on_delete=self._delete_selected_clips,
             on_duplicate=self._duplicate_selected_clip,
-            on_properties=self._show_clip_properties
+            on_properties=self._show_clip_properties,
+            on_copy=self._copy_selection,
+            on_paste=self._paste_clips
         )
         
         self.is_open = True
@@ -232,6 +234,11 @@ class MainWindow:
             self._root.bind('-', lambda e: self._zoom(0.8))
             self._root.bind('0', lambda e: self._zoom_reset())
             self._root.bind('<Control-d>', lambda e: self._duplicate_loop())  # Ctrl+D to duplicate loop
+            self._root.bind('<Control-c>', lambda e: self._copy_selection())  # Ctrl+C to copy clips
+            self._root.bind('<Control-v>', lambda e: self._paste_clips())  # Ctrl+V to paste clips
+            self._root.bind('<Control-Shift-C>', lambda e: self._copy_loop())  # Ctrl+Shift+C to copy loop
+            self._root.bind('<Control-Shift-V>', lambda e: self._paste_loop())  # Ctrl+Shift+V to paste loop
+            self._root.bind('<Delete>', lambda e: self._delete_selected_clips())  # Delete key
         except Exception:
             pass
 
@@ -812,12 +819,74 @@ class MainWindow:
         clicked_clip = self._timeline_canvas._find_clip_at(x, y)
         
         if clicked_clip:
+            # Right-click on clip - show clip menu
             track_idx, clip = clicked_clip
-            self._timeline_canvas.select_clip(track_idx, clip)
+            
+            # Check if clicked clip is already in selection
+            selected_clips = self._timeline_canvas.get_selected_clips()
+            is_in_selection = any(c == clip for _, c in selected_clips)
+            
+            # If not in selection, select only this clip
+            if not is_in_selection:
+                self._timeline_canvas.select_clip(track_idx, clip)
+                selected_clips = [(track_idx, clip)]
+            
+            # Determine menu label
+            if len(selected_clips) > 1:
+                clip_name = f"{len(selected_clips)} clips"
+                multi_selection = True
+            else:
+                clip_name = clip.name
+                multi_selection = False
             
             # Delegate menu rendering to ClipContextMenu
             if self._clip_menu:
-                self._clip_menu.show(event, clip.name)
+                self._clip_menu.show(event, clip_name, multi_selection=multi_selection)
+        else:
+            # Right-click on empty timeline - show paste menu
+            if y > self._timeline_canvas.ruler_height:
+                self._show_timeline_context_menu(event, x, y)
+    
+    def _show_timeline_context_menu(self, event, x, y):
+        """Show context menu for empty timeline area (paste operations)."""
+        if tk is None or self._root is None:
+            return
+        
+        # Set paste position at click location
+        time = (x - self._timeline_canvas.left_margin) / self._timeline_canvas.px_per_sec
+        self._timeline_canvas.paste_position = max(0, self._timeline_canvas.snap_time(time))
+        self._timeline_canvas.paste_cursor_visible = bool(self._timeline_canvas.clipboard)
+        self._timeline_canvas.redraw()
+        
+        menu = tk.Menu(self._root, tearoff=0, bg="#2d2d2d", fg="#f5f5f5", activebackground="#3b82f6")
+        
+        # Show paste position
+        time_str = f"{self._timeline_canvas.paste_position:.2f}s"
+        menu.add_command(
+            label=f"📍 Position: {time_str}",
+            state="disabled",
+            foreground="#888888"
+        )
+        menu.add_separator()
+        
+        # Paste option (enabled only if clipboard has content)
+        if self._timeline_canvas.clipboard:
+            clip_count = len(self._timeline_canvas.clipboard)
+            menu.add_command(
+                label=f"📌 Paste {clip_count} clip(s) here",
+                command=self._paste_clips
+            )
+        else:
+            menu.add_command(
+                label="📌 Paste (clipboard empty)",
+                state="disabled",
+                foreground="#888888"
+            )
+        
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
 
     def _delete_selected_clip(self):
         """Delete the selected clip."""
@@ -831,11 +900,139 @@ class MainWindow:
         track_idx, clip = selected
         self.timeline.remove_clip(track_idx, clip)
         self._timeline_canvas.selected_clip = None
+        self._timeline_canvas.selected_clips = []
         self._track_controls.populate_tracks(self.timeline)
         self._timeline_canvas.redraw()
         
         if self._status:
             self._status.set(f"✓ Deleted clip '{clip.name}'")
+    
+    def _delete_selected_clips(self):
+        """Delete all selected clips."""
+        if not self._timeline_canvas:
+            return
+        
+        selected_clips = self._timeline_canvas.get_selected_clips()
+        if not selected_clips:
+            return
+        
+        count = len(selected_clips)
+        
+        for track_idx, clip in selected_clips:
+            self.timeline.remove_clip(track_idx, clip)
+        
+        self._timeline_canvas.clear_selection()
+        self._track_controls.populate_tracks(self.timeline)
+        self._timeline_canvas.redraw()
+        
+        if self._status:
+            self._status.set(f"✓ Deleted {count} clip(s)")
+    
+    def _copy_selection(self):
+        """Copy selected clips to clipboard."""
+        if not self._timeline_canvas:
+            return
+        
+        if self._timeline_canvas.copy_selected_clips():
+            if self._status:
+                count = len(self._timeline_canvas.clipboard)
+                self._status.set(f"📋 Copied {count} clip(s)")
+        else:
+            if self._status:
+                self._status.set("⚠ No clips selected to copy")
+    
+    def _paste_clips(self):
+        """Paste clips from clipboard."""
+        if not self._timeline_canvas:
+            return
+        
+        if not self._timeline_canvas.clipboard:
+            if self._status:
+                self._status.set("⚠ Clipboard is empty")
+            return
+        
+        pasted_clips = self._timeline_canvas.paste_clips()
+        
+        if pasted_clips:
+            self._track_controls.populate_tracks(self.timeline)
+            if self._status:
+                self._status.set(f"📌 Pasted {len(pasted_clips)} clip(s)")
+        else:
+            if self._status:
+                self._status.set("⚠ Failed to paste clips")
+    
+    def _copy_loop(self):
+        """Copy all clips within the loop region to clipboard."""
+        if not self.player or not self.timeline or not self._timeline_canvas:
+            if self._status:
+                self._status.set("⚠ No player or timeline available")
+            return
+        
+        try:
+            loop_enabled, loop_start, loop_end = self.player.get_loop()
+            
+            if not loop_enabled:
+                if self._status:
+                    self._status.set("⚠ Loop is not enabled. Set loop points first (Shift+drag on timeline)")
+                return
+            
+            # Get all clips in the loop region
+            clips_in_loop = list(self.timeline.get_clips_for_range(loop_start, loop_end))
+            
+            if not clips_in_loop:
+                if self._status:
+                    self._status.set("⚠ No clips found in loop region")
+                return
+            
+            # Select clips in loop and copy them
+            self._timeline_canvas.selected_clips = clips_in_loop
+            
+            if self._timeline_canvas.copy_selected_clips():
+                if self._status:
+                    count = len(clips_in_loop)
+                    self._status.set(f"📋 Copied loop region: {count} clip(s) | {loop_start:.2f}s - {loop_end:.2f}s")
+                print(f"🔁 Copied {count} clips from loop region [{loop_start:.3f}s - {loop_end:.3f}s]")
+        
+        except Exception as e:
+            if self._status:
+                self._status.set(f"⚠ Error copying loop: {e}")
+            print(f"Error copying loop: {e}")
+    
+    def _paste_loop(self):
+        """Paste clips from loop clipboard at loop end position."""
+        if not self.player or not self.timeline or not self._timeline_canvas:
+            if self._status:
+                self._status.set("⚠ No player or timeline available")
+            return
+        
+        if not self._timeline_canvas.clipboard:
+            if self._status:
+                self._status.set("⚠ Clipboard is empty")
+            return
+        
+        try:
+            loop_enabled, loop_start, loop_end = self.player.get_loop()
+            
+            if not loop_enabled:
+                # Paste at current time if no loop
+                self._paste_clips()
+                return
+            
+            # Paste at loop end
+            pasted_clips = self._timeline_canvas.paste_clips(at_time=loop_end)
+            
+            if pasted_clips:
+                self._track_controls.populate_tracks(self.timeline)
+                if self._status:
+                    self._status.set(f"📌 Pasted {len(pasted_clips)} clip(s) at loop end ({loop_end:.2f}s)")
+            else:
+                if self._status:
+                    self._status.set("⚠ Failed to paste clips")
+        
+        except Exception as e:
+            if self._status:
+                self._status.set(f"⚠ Error pasting loop: {e}")
+            print(f"Error pasting loop: {e}")
 
     def _duplicate_selected_clip(self):
         """Duplicate the selected clip."""

@@ -27,10 +27,18 @@ class TimelineCanvas:
         self.ruler_height = 32
         
         # Clip interaction state
-        self.selected_clip = None  # (track_index, clip_object)
+        self.selected_clip = None  # (track_index, clip_object) - for single selection compatibility
+        self.selected_clips = []  # [(track_index, clip_object), ...] - for multiple selection
         self.drag_data = None  # {"clip": clip, "track": idx, "start_x": x, "start_time": t}
         self.resize_data = None  # {"clip": clip, "track": idx, "edge": "left"|"right", ...}
         self.clip_canvas_ids = {}  # {canvas_id: (track_idx, clip_obj)}
+        
+        # Clipboard for copy/paste
+        self.clipboard = []  # [(track_index, clip_data), ...]
+        
+        # Paste cursor position (where to paste clips)
+        self.paste_position = 0.0  # Time in seconds where clips will be pasted
+        self.paste_cursor_visible = False  # Show visual indicator
         
         # Grid state
         self.snap_enabled = False
@@ -289,9 +297,12 @@ class TimelineCanvas:
         except Exception:
             pass
         
+        # Check if clip is in multi-selection
+        is_selected = any(c == clip for _, c in self.selected_clips)
+        
         # Selection highlight
-        border_width = 3 if getattr(clip, 'selected', False) else 2
-        if getattr(clip, 'selected', False):
+        border_width = 3 if is_selected else 2
+        if is_selected:
             clip_border = "#ffffff"
         
         # Clip rectangle
@@ -431,6 +442,41 @@ class TimelineCanvas:
             cursor_x, 10,
             fill="#ef4444", outline=""
         )
+        
+        # Draw paste cursor if visible
+        if self.paste_cursor_visible and self.clipboard:
+            self._draw_paste_cursor(height)
+
+    def _draw_paste_cursor(self, height):
+        """Draw the paste position cursor."""
+        if self.canvas is None:
+            return
+        
+        paste_x = self.left_margin + self.paste_position * self.px_per_sec
+        
+        # Paste cursor line (dashed, different color)
+        self.canvas.create_line(
+            paste_x, self.ruler_height, paste_x, height,
+            fill="#10b981", width=2, dash=(5, 3), tags="paste_cursor"
+        )
+        
+        # Paste cursor indicator (triangle pointing down)
+        self.canvas.create_polygon(
+            paste_x - 8, self.ruler_height,
+            paste_x + 8, self.ruler_height,
+            paste_x, self.ruler_height + 12,
+            fill="#10b981", outline="#065f46", width=2, tags="paste_cursor"
+        )
+        
+        # Time label
+        time_str = f"{self.paste_position:.2f}s"
+        self.canvas.create_text(
+            paste_x, self.ruler_height + 22,
+            text=time_str,
+            fill="#10b981",
+            font=("Segoe UI", 8, "bold"),
+            tags="paste_cursor"
+        )
 
     def update_cursor(self, current_time):
         """Update cursor position."""
@@ -500,6 +546,9 @@ class TimelineCanvas:
             self.loop_selection_start = max(0, time)
             return
         
+        # Check for Ctrl key (multi-selection)
+        ctrl_pressed = event.state & 0x0004  # Ctrl key
+        
         # Find clicked clip
         clicked_clip = self._find_clip_at(x, y)
         
@@ -508,27 +557,46 @@ class TimelineCanvas:
             clip_x0 = self.left_margin + clip.start_time * self.px_per_sec
             clip_x1 = self.left_margin + clip.end_time * self.px_per_sec
             
-            # Check for edge resize
-            if abs(x - clip_x0) < 8:
+            # Check for edge resize (only if single clip selected)
+            if not ctrl_pressed and abs(x - clip_x0) < 8:
                 self.resize_data = {
                     "clip": clip, "track": track_idx,
                     "edge": "left", "orig_start": clip.start_time
                 }
-            elif abs(x - clip_x1) < 8:
+                self.select_clip(track_idx, clip)
+            elif not ctrl_pressed and abs(x - clip_x1) < 8:
                 self.resize_data = {
                     "clip": clip, "track": track_idx,
                     "edge": "right", "orig_end": clip.end_time
                 }
+                self.select_clip(track_idx, clip)
             else:
-                # Start drag
-                self.drag_data = {
-                    "clip": clip, "track": track_idx,
-                    "start_x": x, "start_time": clip.start_time
-                }
-            
-            self.select_clip(track_idx, clip)
+                # Multi-selection or single selection
+                if ctrl_pressed:
+                    self.toggle_clip_selection(track_idx, clip)
+                else:
+                    # Start drag if not multi-selecting
+                    self.drag_data = {
+                        "clip": clip, "track": track_idx,
+                        "start_x": x, "start_time": clip.start_time
+                    }
+                    self.select_clip(track_idx, clip)
         else:
-            self.select_clip(None, None)
+            # Clicked on empty area
+            if not ctrl_pressed:
+                self.clear_selection()
+            
+            # Set paste position if clipboard has content
+            if self.clipboard and y > self.ruler_height:
+                time = (x - self.left_margin) / self.px_per_sec
+                self.paste_position = max(0, self.snap_time(time))
+                self.paste_cursor_visible = True
+                self.redraw()
+                print(f"📍 Paste position set to {self.paste_position:.2f}s (click here or press Ctrl+V to paste)")
+            elif not self.clipboard:
+                # Hide paste cursor if clipboard is empty
+                self.paste_cursor_visible = False
+                self.redraw()
 
     def on_drag(self, event):
         """Handle mouse drag."""
@@ -690,22 +758,156 @@ class TimelineCanvas:
         self.redraw()
 
     def select_clip(self, track_idx, clip):
-        """Select a clip."""
-        if self.selected_clip:
-            old_track, old_clip = self.selected_clip
-            old_clip.selected = False
+        """Select a single clip (clears previous selection)."""
+        # Clear all previous selections
+        self.selected_clips = []
+        self.selected_clip = None
         
         if clip:
-            clip.selected = True
+            self.selected_clips = [(track_idx, clip)]
             self.selected_clip = (track_idx, clip)
-        else:
-            self.selected_clip = None
         
         self.redraw()
 
+    def toggle_clip_selection(self, track_idx, clip):
+        """Toggle clip selection (for multi-selection with Ctrl)."""
+        # Check if already selected
+        clip_tuple = (track_idx, clip)
+        
+        if clip_tuple in self.selected_clips:
+            # Deselect
+            self.selected_clips.remove(clip_tuple)
+            if self.selected_clip == clip_tuple:
+                self.selected_clip = self.selected_clips[0] if self.selected_clips else None
+        else:
+            # Add to selection
+            self.selected_clips.append(clip_tuple)
+            self.selected_clip = clip_tuple
+        
+        self.redraw()
+
+    def clear_selection(self):
+        """Clear all clip selections."""
+        self.selected_clips = []
+        self.selected_clip = None
+        self.redraw()
+
     def get_selected_clip(self):
-        """Get currently selected clip."""
+        """Get currently selected clip (for backward compatibility)."""
         return self.selected_clip
+    
+    def get_selected_clips(self):
+        """Get all selected clips."""
+        return self.selected_clips
+    
+    def copy_selected_clips(self):
+        """Copy selected clips to clipboard."""
+        if not self.selected_clips:
+            return False
+        
+        # Store clip data in clipboard
+        self.clipboard = []
+        
+        for track_idx, clip in self.selected_clips:
+            clip_data = {
+                'track_idx': track_idx,
+                'name': clip.name,
+                'buffer': clip.buffer,
+                'sample_rate': clip.sample_rate,
+                'start_time': clip.start_time,
+                'duration': clip.duration,
+                'color': clip.color,
+                'file_path': clip.file_path,
+                # Editing properties
+                'start_offset': getattr(clip, 'start_offset', 0.0),
+                'end_offset': getattr(clip, 'end_offset', 0.0),
+                'fade_in': getattr(clip, 'fade_in', 0.0),
+                'fade_in_shape': getattr(clip, 'fade_in_shape', 'linear'),
+                'fade_out': getattr(clip, 'fade_out', 0.0),
+                'fade_out_shape': getattr(clip, 'fade_out_shape', 'linear'),
+                'pitch_semitones': getattr(clip, 'pitch_semitones', 0.0),
+                'volume': getattr(clip, 'volume', 1.0),
+            }
+            self.clipboard.append(clip_data)
+        
+        # Show paste cursor at current playback position
+        if self.player:
+            self.paste_position = float(getattr(self.player, "_current_time", 0.0))
+        else:
+            self.paste_position = 0.0
+        self.paste_cursor_visible = True
+        self.redraw()
+        
+        print(f"📋 Copied {len(self.clipboard)} clip(s) to clipboard")
+        print(f"📍 Paste position set to {self.paste_position:.2f}s (click on timeline to change, or press Ctrl+V to paste)")
+        return True
+    
+    def paste_clips(self, at_time=None):
+        """Paste clips from clipboard.
+        
+        Args:
+            at_time: Optional time to paste at. If None, uses paste_position if set,
+                    otherwise uses current playback time.
+        """
+        if not self.clipboard:
+            return []
+        
+        from src.audio.clip import AudioClip
+        
+        # Determine paste position (priority: at_time > paste_position > current_time)
+        if at_time is None:
+            if self.paste_cursor_visible:
+                at_time = self.paste_position
+            else:
+                at_time = float(getattr(self.player, "_current_time", 0.0)) if self.player else 0.0
+        
+        # Find the earliest clip in clipboard to calculate offset
+        min_start = min(clip_data['start_time'] for clip_data in self.clipboard)
+        time_offset = at_time - min_start
+        
+        pasted_clips = []
+        
+        for clip_data in self.clipboard:
+            # Create new clip with offset time
+            new_start_time = clip_data['start_time'] + time_offset
+            
+            new_clip = AudioClip(
+                clip_data['name'] + " (paste)",
+                clip_data['buffer'],
+                clip_data['sample_rate'],
+                new_start_time,
+                duration=clip_data['duration'],
+                color=clip_data['color'],
+                file_path=clip_data['file_path'],
+            )
+            
+            # Restore editing properties
+            new_clip.start_offset = clip_data['start_offset']
+            new_clip.end_offset = clip_data['end_offset']
+            new_clip.fade_in = clip_data['fade_in']
+            new_clip.fade_in_shape = clip_data['fade_in_shape']
+            new_clip.fade_out = clip_data['fade_out']
+            new_clip.fade_out_shape = clip_data['fade_out_shape']
+            new_clip.pitch_semitones = clip_data['pitch_semitones']
+            new_clip.volume = clip_data['volume']
+            
+            # Add to timeline
+            track_idx = clip_data['track_idx']
+            if self.timeline:
+                self.timeline.add_clip(track_idx, new_clip)
+                pasted_clips.append((track_idx, new_clip))
+        
+        # Select pasted clips
+        self.selected_clips = pasted_clips
+        self.selected_clip = pasted_clips[0] if pasted_clips else None
+        
+        # Hide paste cursor after pasting
+        self.paste_cursor_visible = False
+        
+        self.redraw()
+        print(f"📌 Pasted {len(pasted_clips)} clip(s) at {at_time:.3f}s")
+        
+        return pasted_clips
 
     @staticmethod
     def _lighten_color(hex_color, factor=1.3):
