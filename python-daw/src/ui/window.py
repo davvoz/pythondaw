@@ -107,6 +107,7 @@ class MainWindow:
             'save_project_as': self._save_project_as,
             'import_audio': self._import_audio_dialog,
             'browse_audio': self._browse_audio_files,
+            'export_audio': self._export_audio_dialog,
             'get_recent_files': self._get_recent_files,
             'import_recent': self._import_recent_file,
             'exit': self.close,
@@ -241,6 +242,7 @@ class MainWindow:
             self._root.bind('<Control-o>', lambda e: self._open_project())  # Ctrl+O for Open
             self._root.bind('<Control-s>', lambda e: self._save_project())  # Ctrl+S for Save
             self._root.bind('<Control-Shift-S>', lambda e: self._save_project_as())  # Ctrl+Shift+S for Save As
+            self._root.bind('<Control-e>', lambda e: self._export_audio_dialog())  # Ctrl+E for Export Audio
             self._root.bind('+', lambda e: self._zoom(1.25))
             self._root.bind('-', lambda e: self._zoom(0.8))
             self._root.bind('0', lambda e: self._zoom_reset())
@@ -1462,6 +1464,141 @@ Samples: {len(clip.buffer)}
             if self._status:
                 self._status.set(f"⚠ Failed to save project: {str(e)}")
             print(f"✗ Save error: {e}")
+
+    def _export_audio_dialog(self):
+        """Export the song as WAV file, respecting loop if present."""
+        if filedialog is None:
+            return
+        
+        # Ask user for file path
+        file_path = filedialog.asksaveasfilename(
+            title="Export Audio",
+            defaultextension=".wav",
+            filetypes=[
+                ("WAV Audio", "*.wav"),
+                ("All Files", "*.*")
+            ]
+        )
+        
+        if not file_path:
+            return
+        
+        try:
+            if self._status:
+                self._status.set("⏳ Exporting audio...")
+            
+            # Determine export range
+            start_time = 0.0
+            end_time = 0.0
+            use_loop = False
+            
+            # Check if loop is enabled
+            if self.player and hasattr(self.player, 'loop_enabled') and self.player.loop_enabled:
+                # Use loop range
+                start_time = getattr(self.player, 'loop_start', 0.0)
+                end_time = getattr(self.player, 'loop_end', 0.0)
+                use_loop = True
+                print(f"🔁 Exporting loop region: {start_time:.3f}s to {end_time:.3f}s")
+            else:
+                # Find the extent of all clips in the timeline
+                if self.timeline:
+                    max_end = 0.0
+                    clip_count = 0
+                    for track_idx, clip in self.timeline.all_placements():
+                        if hasattr(clip, 'end_time'):
+                            max_end = max(max_end, clip.end_time)
+                            clip_count += 1
+                    
+                    if clip_count == 0:
+                        if messagebox:
+                            messagebox.showwarning(
+                                "Export Warning",
+                                "No clips found in the timeline. Nothing to export."
+                            )
+                        if self._status:
+                            self._status.set("⚠ No clips to export")
+                        return
+                    
+                    start_time = 0.0
+                    end_time = max_end
+                    print(f"📄 Exporting full song: 0.0s to {end_time:.3f}s ({clip_count} clips)")
+            
+            if end_time <= start_time:
+                if messagebox:
+                    messagebox.showwarning(
+                        "Export Warning",
+                        "Invalid time range. Cannot export."
+                    )
+                if self._status:
+                    self._status.set("⚠ Invalid export range")
+                return
+            
+            duration = end_time - start_time
+            sample_rate = 44100  # Standard CD quality
+            
+            # Render the audio using AudioEngine
+            from ..audio.engine import AudioEngine
+            engine = AudioEngine()
+            engine.initialize()
+            
+            print(f"🎵 Rendering audio: duration={duration:.3f}s, sample_rate={sample_rate} Hz")
+            audio_buffer = engine.render_window(
+                self.timeline,
+                start_time=start_time,
+                duration=duration,
+                sample_rate=sample_rate
+            )
+            
+            if not audio_buffer or len(audio_buffer) == 0:
+                if messagebox:
+                    messagebox.showwarning(
+                        "Export Warning",
+                        "No audio data to export. The timeline may be empty."
+                    )
+                if self._status:
+                    self._status.set("⚠ No audio data")
+                return
+            
+            # Save to WAV file
+            from ..utils.audio_io import save_audio_file
+            save_audio_file(audio_buffer, file_path, sample_rate, format="wav")
+            
+            # Show success message
+            import os
+            file_size = os.path.getsize(file_path) / 1024  # KB
+            if self._status:
+                loop_text = " (loop region)" if use_loop else ""
+                self._status.set(
+                    f"✓ Exported '{os.path.basename(file_path)}'{loop_text} - "
+                    f"{duration:.2f}s, {file_size:.1f} KB"
+                )
+            
+            print(f"✓ Audio exported: {file_path}")
+            print(f"  Duration: {duration:.2f}s")
+            print(f"  Sample rate: {sample_rate} Hz")
+            print(f"  Samples: {len(audio_buffer):,}")
+            print(f"  File size: {file_size:.1f} KB")
+            
+            if messagebox:
+                messagebox.showinfo(
+                    "Export Complete",
+                    f"Audio successfully exported to:\n{file_path}\n\n"
+                    f"Duration: {duration:.2f}s\n"
+                    f"Sample rate: {sample_rate} Hz\n"
+                    f"File size: {file_size:.1f} KB"
+                )
+                
+        except Exception as e:
+            if messagebox:
+                messagebox.showerror(
+                    "Export Error",
+                    f"Failed to export audio:\n\n{str(e)}"
+                )
+            if self._status:
+                self._status.set(f"⚠ Export failed: {str(e)}")
+            print(f"✗ Export error: {e}")
+            import traceback
+            traceback.print_exc()
 
     # Lifecycle methods
     def run(self):

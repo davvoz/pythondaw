@@ -75,6 +75,11 @@ class MenuManager:
             accelerator="Ctrl+B"
         )
         file_menu.add_separator()
+        file_menu.add_command(
+            label="Export Audio...",
+            command=self.callbacks.get('export_audio', lambda: None),
+            accelerator="Ctrl+E"
+        )
         
         # Recent files submenu
         recent_menu = tk.Menu(
