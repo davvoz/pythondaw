@@ -176,29 +176,43 @@ class TimelineCanvas:
         beat_duration = self.project.get_beat_duration()
         
         max_time = width / self.px_per_sec
-        bar_num = 0
         
+        # First pass: Draw all bar lines explicitly
+        bar_num = 0
+        while True:
+            bar_time = bar_num * bar_duration
+            if bar_time > max_time:
+                break
+            
+            x = self.left_margin + bar_time * self.px_per_sec
+            
+            # Bar line (thick, bright blue)
+            self.canvas.create_line(x, self.ruler_height, x, height, fill="#2b6cb0", width=3)
+            self.canvas.create_text(
+                x + 4, 8, anchor="nw", text=f"{bar_num + 1}",
+                fill="#63b3ed", font=("Consolas", 9, "bold")
+            )
+            bar_num += 1
+        
+        # Second pass: Draw beat and subdivision lines
         grid_time = bar_duration * self.grid_division
-        t = 0.0
+        t = grid_time  # Start from first subdivision (skip t=0 already drawn as bar)
         
         while t < max_time:
             x = self.left_margin + t * self.px_per_sec
             
-            # Determine line type
-            is_bar = abs(t % bar_duration) < 0.001
+            # Check if this is close to a bar line (skip if already drawn)
+            is_bar_line = abs(t % bar_duration) < 0.001
+            if is_bar_line:
+                t += grid_time
+                continue
+            
+            # Determine line type with tolerance
             is_beat = abs(t % beat_duration) < 0.001
             is_half_beat = abs(t % (beat_duration / 2)) < 0.001
             is_quarter_beat = abs(t % (beat_duration / 4)) < 0.001
             
-            if is_bar:
-                # Bar line (thick, bright blue)
-                self.canvas.create_line(x, self.ruler_height, x, height, fill="#2b6cb0", width=3)
-                self.canvas.create_text(
-                    x + 4, 8, anchor="nw", text=f"{bar_num + 1}",
-                    fill="#63b3ed", font=("Consolas", 9, "bold")
-                )
-                bar_num += 1
-            elif is_beat:
+            if is_beat:
                 self.canvas.create_line(x, self.ruler_height, x, height, fill="#2563eb", width=2)
             elif is_half_beat:
                 self.canvas.create_line(x, self.ruler_height, x, height, fill="#3b82f6", width=1)
