@@ -1433,12 +1433,15 @@ Samples: {len(clip.buffer)}
                     # Sync track name from mixer
                     project_track.name = mixer_track.get("name", f"Track {i + 1}")
                     
+                    # Sync track volume from mixer
+                    project_track.volume = mixer_track.get("volume", 1.0)
+                    
                     # Sync clips from timeline to track using Timeline's API
                     project_track.audio_files = []
                     clips = self.timeline.get_clips_for_track(i)
                     for clip in clips:
                         project_track.audio_files.append(clip)
-                    print(f"Syncing track {i}: '{project_track.name}' with {len(project_track.audio_files)} clips")
+                    print(f"Syncing track {i}: '{project_track.name}' vol={project_track.volume:.2f} with {len(project_track.audio_files)} clips")
             
             # Save project (default to separate audio files for better performance)
             self.project.save_project(file_path, embed_audio=False)
@@ -1536,6 +1539,13 @@ Samples: {len(clip.buffer)}
             duration = end_time - start_time
             sample_rate = 44100  # Standard CD quality
             
+            # Collect track volumes from the project
+            track_volumes = {}
+            if self.project and self.project.tracks:
+                for i, track in enumerate(self.project.tracks):
+                    track_volumes[i] = track.volume
+                print(f"📊 Track volumes: {track_volumes}")
+            
             # Render the audio using AudioEngine
             from ..audio.engine import AudioEngine
             engine = AudioEngine()
@@ -1546,7 +1556,8 @@ Samples: {len(clip.buffer)}
                 self.timeline,
                 start_time=start_time,
                 duration=duration,
-                sample_rate=sample_rate
+                sample_rate=sample_rate,
+                track_volumes=track_volumes
             )
             
             if not audio_buffer or len(audio_buffer) == 0:
