@@ -194,9 +194,10 @@ class TimelineCanvas:
         except Exception:
             pass
         
+        # Draw in correct order: backgrounds first, then lines/content on top
         self._draw_ruler(width)
-        self._draw_grid(width, height)
-        self._draw_track_lanes(width)
+        self._draw_track_lanes(width)  # Track backgrounds (opaque)
+        self._draw_grid(width, height)  # Grid lines OVER the tracks
         self._draw_clips()
         self._draw_loop_markers(height)
         self._draw_cursor(height)
@@ -295,13 +296,13 @@ class TimelineCanvas:
             self._draw_time_grid(width, height)
 
     def _draw_musical_grid(self, width, height):
-        """Draw musical grid with bars and beats."""
+        """Draw musical grid with bars, beats and subdivisions based on grid_division."""
         bar_duration = self.project.get_bar_duration()
         beat_duration = self.project.get_beat_duration()
         
         max_time = width / self.px_per_sec
         
-        # First pass: Draw all bar lines explicitly
+        # PASS 1: Draw bar lines first (strongest - every bar)
         bar_num = 0
         while True:
             bar_time = bar_num * bar_duration
@@ -310,63 +311,60 @@ class TimelineCanvas:
             
             x = self.left_margin + bar_time * self.px_per_sec
             
-            # Bar line (thick, bright blue)
-            self.canvas.create_line(x, self.ruler_height, x, height, fill="#2b6cb0", width=3)
+            # Bar line - thick bright blue (#3b82f6)
+            self.canvas.create_line(x, self.ruler_height, x, height, fill="#3b82f6", width=3)
             self.canvas.create_text(
                 x + 4, 8, anchor="nw", text=f"{bar_num + 1}",
-                fill="#63b3ed", font=("Consolas", 9, "bold")
+                fill="#60a5fa", font=("Consolas", 9, "bold")
             )
             bar_num += 1
         
-        # Second pass: Draw beat and subdivision lines
-        grid_time = bar_duration * self.grid_division
-        t = grid_time  # Start from first subdivision (skip t=0 already drawn as bar)
-        
-        while t < max_time:
-            x = self.left_margin + t * self.px_per_sec
+        # PASS 2: Draw ALL grid subdivision lines based on selected grid_division
+        # grid_division is in fractions of a bar (e.g., 0.25 = 1/4 bar, 0.125 = 1/8 bar)
+        if self.grid_division > 0:
+            grid_time = bar_duration * self.grid_division
+            t = grid_time  # Start from first grid point
             
-            # Check if this is close to a bar line (skip if already drawn)
-            is_bar_line = abs(t % bar_duration) < 0.001
-            if is_bar_line:
+            while t < max_time:
+                x = self.left_margin + t * self.px_per_sec
+                
+                # Check what type of line this is
+                is_bar = abs(t % bar_duration) < 0.001
+                is_beat = abs(t % beat_duration) < 0.001
+                
+                if is_bar:
+                    # Skip - already drawn as bar
+                    pass
+                elif is_beat:
+                    # Beat line - medium blue, solid (#1e40af)
+                    self.canvas.create_line(x, self.ruler_height, x, height, fill="#1e40af", width=2)
+                else:
+                    # Subdivision line - light blue, dashed (#60a5fa)
+                    self.canvas.create_line(x, self.ruler_height, x, height, 
+                                          fill="#60a5fa", width=1, dash=(3, 3))
+                
                 t += grid_time
-                continue
-            
-            # Determine line type with tolerance
-            is_beat = abs(t % beat_duration) < 0.001
-            is_half_beat = abs(t % (beat_duration / 2)) < 0.001
-            is_quarter_beat = abs(t % (beat_duration / 4)) < 0.001
-            
-            if is_beat:
-                self.canvas.create_line(x, self.ruler_height, x, height, fill="#2563eb", width=2)
-            elif is_half_beat:
-                self.canvas.create_line(x, self.ruler_height, x, height, fill="#3b82f6", width=1)
-            elif is_quarter_beat:
-                self.canvas.create_line(x, self.ruler_height, x, height, fill="#60a5fa", width=1, dash=(2, 2))
-            else:
-                self.canvas.create_line(x, self.ruler_height, x, height, fill="#93c5fd", width=1, dash=(1, 3))
-            
-            t += grid_time
 
     def _draw_time_grid(self, width, height):
-        """Draw simple time-based grid (seconds)."""
+        """Draw simple time-based grid (seconds) - visible on dark background."""
         total_secs = int(width / self.px_per_sec) + 1
         
         for sec in range(0, total_secs):
             x = self.left_margin + sec * self.px_per_sec
             
-            # Major gridline
-            self.canvas.create_line(x, self.ruler_height, x, height, fill="#1f1f1f", width=1)
+            # Major gridline - bright blue like musical grid
+            self.canvas.create_line(x, self.ruler_height, x, height, fill="#3b82f6", width=2)
             
             # Time label
             self.canvas.create_text(
                 x + 4, 8, anchor="nw", text=f"{sec:02d}s",
-                fill="#888888", font=("Consolas", 8)
+                fill="#60a5fa", font=("Consolas", 8, "bold")
             )
             
-            # Minor ticks (quarters)
+            # Minor ticks (quarters) - light blue dashed
             for q in range(1, 4):
                 mx = x + q * (self.px_per_sec / 4.0)
-                self.canvas.create_line(mx, self.ruler_height - 8, mx, height, fill="#151515", width=1)
+                self.canvas.create_line(mx, self.ruler_height, mx, height, fill="#60a5fa", width=1, dash=(3, 3))
 
     def _draw_track_lanes(self, width):
         """Draw track lanes with labels."""

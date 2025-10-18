@@ -485,10 +485,16 @@ class MainWindow:
             print(f"Snap to grid: {status}")
 
     def _on_grid_change(self, event=None):
-        """Change grid division."""
+        """Change grid division and redraw timeline."""
         if self._toolbar_manager and self._timeline_canvas:
             division = self._toolbar_manager.get_grid_division()
             self._timeline_canvas.set_grid_division(division)
+            # Redraw to show new grid
+            self._timeline_canvas.redraw()
+            if self._status:
+                # Show feedback
+                grid_str = self._toolbar_manager.grid_var.get() if hasattr(self._toolbar_manager, 'grid_var') else str(division)
+                self._status.set(f"Grid: {grid_str}")
 
     # Zoom methods
     def _zoom(self, factor):
