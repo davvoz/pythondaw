@@ -266,12 +266,6 @@ class TimelineCanvas:
                 fill=bg_color, outline=""
             )
             
-            # Track separator
-            self.canvas.create_line(
-                self.left_margin, y1, width, y1,
-                fill="#252525", width=1
-            )
-            
             # Track label
             label = self.mixer.tracks[i].get("name", f"Track {i+1}")
             track_color = self.mixer.tracks[i].get("color", "#3b82f6")

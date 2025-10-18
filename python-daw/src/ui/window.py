@@ -197,7 +197,6 @@ class MainWindow:
         # Tracks header with buttons
         tracks_header = ttk.Frame(sidebar, style="Sidebar.TFrame")
         tracks_header.pack(fill="x", padx=12, pady=(8, 4))
-        ttk.Label(tracks_header, text="TRACKS", style="SidebarTitle.TLabel").pack(side="left")
         
         btn_container = ttk.Frame(tracks_header, style="Sidebar.TFrame")
         btn_container.pack(side="right")
@@ -206,14 +205,15 @@ class MainWindow:
             command=self._add_track_dialog,
             style="Tool.TButton", width=3
         ).pack(side="left", padx=(0, 2))
-        ttk.Button(
-            btn_container, text="🎵",
-            command=self._add_dummy_clip,
-            style="Tool.TButton", width=3
-        ).pack(side="left")
         
-        # Create track controls
-        self._track_controls = TrackControls(sidebar, self.mixer)
+        # Create track controls (pass timeline/project and redraw callback)
+        self._track_controls = TrackControls(
+            sidebar,
+            self.mixer,
+            timeline=self.timeline,
+            project=self.project,
+            redraw_cb=lambda: self._timeline_canvas.redraw() if self._timeline_canvas else None,
+        )
         self._track_controls.build_ui()
         
         return sidebar
