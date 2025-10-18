@@ -21,11 +21,12 @@ class TimelinePlayer:
     Gracefully degrades if sounddevice/numpy is missing.
     """
 
-    def __init__(self, timeline, sample_rate: int = 44100, block_size: int = 512, mixer=None):
+    def __init__(self, timeline, sample_rate: int = 44100, block_size: int = 512, mixer=None, project=None):
         self.timeline = timeline
         self.sample_rate = int(sample_rate)
         self.block_size = int(block_size)
         self.mixer = mixer
+        self.project = project  # New: reference to project for effects
         self._stream: Optional[object] = None
         self._playing = False
         self._current_time = 0.0
@@ -113,33 +114,66 @@ class TimelinePlayer:
             start_t = self._current_time
         end_t = start_t + frames / float(self.sample_rate)
 
-        # Mix clips overlapping this window
+        # Group clips by track (same as render_window for effects)
+        track_clips = {}
         for track_index, clip in self.timeline.get_clips_for_range(start_t, end_t):
             # Check mute/solo state
             if self.mixer is not None and hasattr(self.mixer, 'should_play_track'):
                 if not self.mixer.should_play_track(track_index):
                     continue  # Skip this track
             
-            # compute overlap
-            overlap_start = max(start_t, clip.start_time)
-            overlap_end = min(end_t, clip.end_time)
-            if overlap_end <= overlap_start:
-                continue
-            out_start = int((overlap_start - start_t) * self.sample_rate)
-            out_end = int((overlap_end - start_t) * self.sample_rate)
-            clip_local_start = overlap_start - clip.start_time
-            clip_local_end = overlap_end - clip.start_time
-            # slice clip samples
-            samples = clip.slice_samples(clip_local_start, clip_local_end)
-            if not samples:
-                continue
-            # convert to numpy
-            seg = np.asarray(samples, dtype=np.float32)
-            # mix and clamp
-            seg_len = min(len(seg), out_end - out_start)
-            if seg_len <= 0:
-                continue
-            # Track gain and pan
+            if track_index not in track_clips:
+                track_clips[track_index] = []
+            track_clips[track_index].append(clip)
+        
+        # Process each track separately (render clips, apply effects, then pan/mix)
+        for track_index, clips in track_clips.items():
+            # Create mono buffer for this track
+            track_mono = np.zeros(frames, dtype=np.float32)
+            
+            # Mix all clips of this track
+            for clip in clips:
+                overlap_start = max(start_t, clip.start_time)
+                overlap_end = min(end_t, clip.end_time)
+                if overlap_end <= overlap_start:
+                    continue
+                out_start = int((overlap_start - start_t) * self.sample_rate)
+                out_end = int((overlap_end - start_t) * self.sample_rate)
+                clip_local_start = overlap_start - clip.start_time
+                clip_local_end = overlap_end - clip.start_time
+                
+                # Get clip samples
+                samples = clip.slice_samples(clip_local_start, clip_local_end)
+                if not samples:
+                    continue
+                
+                seg = np.asarray(samples, dtype=np.float32)
+                seg_len = min(len(seg), out_end - out_start)
+                if seg_len <= 0:
+                    continue
+                
+                # Mix into track buffer (clips already have their volume applied)
+                track_mono[out_start:out_start + seg_len] += seg[:seg_len]
+            
+            # Apply per-track effects (if project available)
+            if self.project is not None and hasattr(self.project, 'tracks'):
+                try:
+                    if 0 <= int(track_index) < len(self.project.tracks):
+                        tr = self.project.tracks[int(track_index)]
+                        fx_chain = getattr(tr, 'effects', None)
+                        if fx_chain and getattr(fx_chain, 'slots', None):
+                            # Convert to list for effects processing
+                            track_list = track_mono.tolist()
+                            track_list = fx_chain.process(track_list)
+                            track_mono = np.asarray(track_list, dtype=np.float32)
+                except Exception as e:
+                    # Fail-safe: ignore effect errors in real-time
+                    pass
+            
+            # Clamp track buffer
+            np.clip(track_mono, -1.0, 1.0, out=track_mono)
+            
+            # Apply track gain and pan
             gain = 1.0
             pan = 0.0
             if self.mixer is not None and hasattr(self.mixer, "get_track"):
@@ -147,14 +181,16 @@ class TimelinePlayer:
                 if tr is not None:
                     gain = float(tr.get("volume", 1.0))
                     pan = float(tr.get("pan", 0.0))  # -1..1
+            
             # Equal-power pan
             import math
             angle = (pan + 1) * (math.pi / 4)  # map [-1,1] -> [0, pi/2]
             gL = math.cos(angle) * gain
             gR = math.sin(angle) * gain
 
-            outL[out_start:out_start + seg_len] += seg[:seg_len] * gL
-            outR[out_start:out_start + seg_len] += seg[:seg_len] * gR
+            # Mix into stereo output
+            outL += track_mono * gL
+            outR += track_mono * gR
 
         # Master volume
         mv = 1.0

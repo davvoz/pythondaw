@@ -232,6 +232,22 @@ class TrackControls:
             buttons_frame = tk.Frame(top_bar, bg=row_frame["bg"])
             buttons_frame.pack(side="right", padx=0)
             
+            # FX button (new)
+            fx_btn = tk.Button(
+                buttons_frame,
+                text="FX",
+                width=3,
+                height=1,
+                bg="#8b5cf6",
+                fg="#ffffff",
+                font=("Segoe UI", 8, "bold"),
+                relief="flat",
+                cursor="hand2",
+                borderwidth=0,
+                command=lambda: self._open_effects_dialog(idx)
+            )
+            fx_btn.pack(side="right", padx=2)
+            
             # Solo button with improved style
             solo_btn = tk.Button(
                 buttons_frame,
@@ -620,7 +636,8 @@ class TrackControls:
                 sample_rate=sample_rate,
                 track_volumes=track_volumes,
                 solo_tracks=[track_idx],  # Solo this track
-                mixer=self.mixer  # Pass mixer for mute/solo state
+                mixer=self.mixer,  # Pass mixer for mute/solo state
+                project=self.project  # Apply per-track effects if any
             )
             
             if not audio_buffer or len(audio_buffer) == 0:
@@ -693,7 +710,8 @@ class TrackControls:
                 duration=max_end,
                 sample_rate=sample_rate,
                 track_volumes={i: t.get("volume", 1.0) for i, t in enumerate(self.mixer.tracks)},
-                mixer=self.mixer  # Pass mixer for mute/solo state
+                mixer=self.mixer,  # Pass mixer for mute/solo state
+                project=self.project  # Apply per-track effects if any
             )
             # Apply mixer master volume if present
             try:
@@ -950,3 +968,19 @@ class TrackControls:
         if self.canvas and self.canvas_window:
             canvas_width = event.width
             self.canvas.itemconfig(self.canvas_window, width=canvas_width)
+
+    def _open_effects_dialog(self, track_idx):
+        """Open effects chain dialog for the given track."""
+        if self.project is None or track_idx >= len(self.project.tracks):
+            return
+        
+        track = self.project.tracks[track_idx]
+        track_name = getattr(track, 'name', f"Track {track_idx + 1}")
+        
+        try:
+            from .dialogs.effects_chain_dialog import EffectsChainDialog
+            EffectsChainDialog(self.parent, track, track_name, redraw_cb=self._redraw_cb)
+        except Exception as e:
+            print(f"Error opening effects dialog: {e}")
+            import traceback
+            traceback.print_exc()

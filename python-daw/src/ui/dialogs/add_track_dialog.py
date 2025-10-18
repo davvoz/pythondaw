@@ -27,7 +27,7 @@ class AddTrackDialog:
             
         dialog = tk.Toplevel(self.parent)
         dialog.title("Add Track")
-        dialog.geometry("380x220")
+        dialog.geometry("380x280")
         dialog.configure(bg="#2d2d2d")
         dialog.resizable(False, False)
         dialog.transient(self.parent)
@@ -99,7 +99,7 @@ class AddTrackDialog:
 
         # Buttons
         btn_frame = ttk.Frame(content, style="Sidebar.TFrame")
-        btn_frame.pack(fill="x")
+        btn_frame.pack(fill="x", pady=(8, 0))
 
         def on_ok():
             """Handle OK button."""
@@ -114,8 +114,36 @@ class AddTrackDialog:
             self.result = None
             dialog.destroy()
 
-        ttk.Button(btn_frame, text="Cancel", command=on_cancel, style="Tool.TButton").pack(side="right", padx=(8, 0))
-        ttk.Button(btn_frame, text="OK", command=on_ok, style="Tool.TButton").pack(side="right")
+        # Larger, more visible buttons
+        cancel_btn = tk.Button(
+            btn_frame,
+            text="Cancel",
+            command=on_cancel,
+            bg="#6b7280",
+            fg="#ffffff",
+            font=("Segoe UI", 11, "bold"),
+            relief="flat",
+            cursor="hand2",
+            padx=20,
+            pady=10,
+            width=10
+        )
+        cancel_btn.pack(side="right", padx=(8, 0))
+
+        ok_btn = tk.Button(
+            btn_frame,
+            text="OK",
+            command=on_ok,
+            bg="#10b981",
+            fg="#ffffff",
+            font=("Segoe UI", 11, "bold"),
+            relief="flat",
+            cursor="hand2",
+            padx=20,
+            pady=10,
+            width=10
+        )
+        ok_btn.pack(side="right")
 
         dialog.bind('<Return>', lambda e: on_ok())
         dialog.bind('<Escape>', lambda e: on_cancel())

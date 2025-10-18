@@ -181,6 +181,67 @@ This project is licensed under the MIT License. See the LICENSE file for more de
 - **Format**: JSON + WAV files for maximum compatibility
 - **Easy backup**: Simple file-based project management
 
+## Per-track Effects Chain
+
+Tracks now include an optional, extensible effects chain that applies **during both playback AND export**.
+
+### How to Use
+
+**In the UI:**
+1. Click the **FX** button (purple) next to any track in the sidebar
+2. In the Effects Chain dialog:
+   - **➕ Add Effect** - Choose from Reverb, Delay, Compressor, or EQ
+   - **Select** an effect to adjust its **Wet/Dry** mix (0-100%)
+   - **Bypass** checkbox to temporarily disable an effect
+   - **▲/▼** buttons to reorder effects in the chain
+   - **🗑 Remove** to delete selected effect
+3. Effects are applied **automatically** during:
+   - ▶️ **Real-time playback** (you hear them immediately!)
+   - 💾 **Export** (single track or master mix)
+
+**Programmatically:**
+
+```python
+from src.core.project import Project
+from src.core.track import Track
+from src.effects.reverb import Reverb
+from src.effects.delay import Delay
+
+project = Project()
+track = Track("Lead")
+project.create_track(track)
+
+# Add reverb (30% wet)
+track.add_effect(Reverb(), wet=0.3)
+
+# Add delay with custom settings
+slap = Delay()
+slap.set_parameters({"delay_time": 0.25, "feedback": 0.4, "mix": 0.6})
+track.add_effect(slap, name="Slap Delay", wet=0.5)
+
+# Bypass an effect
+track.effects.slots[0].bypass = True
+
+# Reorder effects (move index 1 to position 0)
+track.move_effect(1, 0)
+
+# Effects apply automatically during playback AND export
+# Just pass project=project to TimelinePlayer and render_window()
+```
+
+### Technical Details
+
+- Each effect must implement `apply(audio_data: List[float]) -> List[float]` (see `src/effects/base.py`)
+- Effects are processed **before** track volume and mixing
+- **Real-time playback**: Effects are applied in the audio callback (per-track buffering)
+- **Export/Rendering**: Same per-track logic in `AudioEngine.render_window()`
+- Projects save/load the complete effects configuration (type, wet, bypass, parameters)
+- Available effects: **Reverb**, **Delay**, **Compressor**, **Equalizer**
+- Easily extensible - add new effects by subclassing `BaseEffect`
+
+See `examples/effects_chain_example.py` for a complete demonstration.
+
+
 See [docs/PROJECT_SAVE_LOAD.md](docs/PROJECT_SAVE_LOAD.md) for complete documentation.
 
 ### 📋 Multi-Selection and Copy/Paste

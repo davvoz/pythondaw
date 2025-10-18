@@ -145,10 +145,20 @@ class ProjectSerializer:
     
     def _serialize_track(self, track, track_index: int, embed_audio: bool) -> Dict[str, Any]:
         """Serialize Track instance to dictionary."""
+        # Effects chain (optional)
+        effects_conf = []
+        try:
+            fx_chain = getattr(track, 'effects', None)
+            if fx_chain and hasattr(fx_chain, 'to_config'):
+                effects_conf = fx_chain.to_config()
+        except Exception:
+            effects_conf = []
+
         return {
             "index": track_index,
             "name": getattr(track, 'name', f"Track {track_index + 1}"),
             "volume": track.volume,
+            "effects": effects_conf,
             "clips": [self._serialize_clip(clip, track_index, i, embed_audio) 
                      for i, clip in enumerate(track.audio_files)],
         }
@@ -218,6 +228,37 @@ class ProjectSerializer:
         
         track = Track(name=data.get("name"))
         track.volume = data["volume"]
+        # Restore effects chain if present
+        try:
+            effects_conf = data.get("effects")
+            if effects_conf:
+                # simple registry: map known effect types
+                try:
+                    from ..effects.reverb import Reverb
+                    from ..effects.delay import Delay
+                    from ..effects.compressor import Compressor
+                    from ..effects.equalizer import Equalizer
+                except ImportError:
+                    # Fallback for running from examples
+                    from effects.reverb import Reverb
+                    from effects.delay import Delay
+                    from effects.compressor import Compressor
+                    from effects.equalizer import Equalizer
+                
+                registry = {
+                    'Reverb': Reverb,
+                    'Delay': Delay,
+                    'Compressor': Compressor,
+                    'Equalizer': Equalizer,
+                    'Equalizer (Simple Gain)': Equalizer,
+                }
+                fx_chain = getattr(track, 'effects', None)
+                if fx_chain and hasattr(fx_chain, 'from_config'):
+                    fx_chain.from_config(effects_conf, registry=registry)
+        except Exception as e:
+            import traceback
+            print(f"Warning: Failed to restore effects: {e}")
+            traceback.print_exc()
         
         # Load clips
         for clip_data in data["clips"]:

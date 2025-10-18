@@ -1567,7 +1567,8 @@ Samples: {len(clip.buffer)}
                 duration=duration,
                 sample_rate=sample_rate,
                 track_volumes=track_volumes,
-                mixer=self.mixer  # Pass mixer for mute/solo state
+                mixer=self.mixer,  # Pass mixer for mute/solo state
+                project=self.project  # Apply per-track effects if any
             )
             
             if not audio_buffer or len(audio_buffer) == 0:

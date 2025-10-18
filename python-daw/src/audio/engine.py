@@ -23,11 +23,13 @@ class AudioEngine:
     def render_window(self, timeline, start_time: float, duration: float, sample_rate: int, 
                      track_volumes: Optional[Dict[int, float]] = None,
                      solo_tracks: Optional[List[int]] = None,
-                     mixer=None) -> List[float]:
+                     mixer=None,
+                     project=None) -> List[float]:
         """Render a mono buffer for [start_time, start_time+duration).
 
         Combina i clip sovrapposti sommandoli e clampando in [-1, 1].
         Applica i volumi delle tracce se forniti.
+        Applica gli effetti per-traccia DOPO il mix dei clip della traccia ma PRIMA del volume finale.
         
         Args:
             timeline: Timeline object con i clip
@@ -37,12 +39,16 @@ class AudioEngine:
             track_volumes: Dictionary opzionale {track_index: volume} con i volumi delle tracce (0.0-1.0)
             solo_tracks: List opzionale di track indices da renderizzare in solo (ignora altre tracce)
             mixer: Mixer opzionale per controllare mute/solo state
+            project: Project opzionale per applicare effetti per-traccia
         """
         if duration <= 0:
             return []
         total_samples = int(duration * sample_rate)
         output = [0.0] * total_samples
         end_time = start_time + duration
+        
+        # Raggruppa clip per traccia
+        track_clips: Dict[int, list] = {}
         for track_index, clip in timeline.get_clips_for_range(start_time, end_time):
             # Se solo_tracks è specificato, salta le tracce che non sono in lista
             if solo_tracks is not None and track_index not in solo_tracks:
@@ -52,41 +58,73 @@ class AudioEngine:
             if mixer is not None and hasattr(mixer, 'should_play_track'):
                 if not mixer.should_play_track(track_index):
                     continue  # Skip muted/non-soloed tracks
-                
-            # determina gli intervalli di sovrapposizione
-            overlap_start = max(start_time, clip.start_time)
-            overlap_end = min(end_time, clip.end_time)
-            if overlap_end <= overlap_start:
-                continue
-            # campioni nel buffer di output
-            out_start_idx = int((overlap_start - start_time) * sample_rate)
-            out_end_idx = int((overlap_end - start_time) * sample_rate)
-            # campioni nel buffer del clip (local time)
-            clip_local_start = overlap_start - clip.start_time
-            clip_local_end = overlap_end - clip.start_time
-            clip_samples = clip.slice_samples(clip_local_start, clip_local_end)
             
-            # Ottieni il volume della traccia (default 1.0 se non specificato)
+            if track_index not in track_clips:
+                track_clips[track_index] = []
+            track_clips[track_index].append(clip)
+        
+        # Renderizza ogni traccia separatamente, applica effetti, poi mixa
+        for track_index, clips in track_clips.items():
+            # Crea buffer vuoto per questa traccia
+            track_buffer = [0.0] * total_samples
+            
+            # Renderizza tutti i clip della traccia nel buffer
+            for clip in clips:
+                overlap_start = max(start_time, clip.start_time)
+                overlap_end = min(end_time, clip.end_time)
+                if overlap_end <= overlap_start:
+                    continue
+                
+                # Posizione nel buffer di output
+                out_start_idx = int((overlap_start - start_time) * sample_rate)
+                
+                # Campioni nel buffer del clip (local time)
+                clip_local_start = overlap_start - clip.start_time
+                clip_local_end = overlap_end - clip.start_time
+                clip_samples = clip.slice_samples(clip_local_start, clip_local_end)
+                
+                # Ottieni il volume del clip
+                clip_volume = getattr(clip, 'volume', 1.0)
+                
+                # Mix clips della stessa traccia (somma e clamp)
+                for i, s in enumerate(clip_samples):
+                    idx = out_start_idx + i
+                    if 0 <= idx < total_samples:
+                        sample_with_clip_volume = float(s) * clip_volume
+                        mixed = track_buffer[idx] + sample_with_clip_volume
+                        # Clamp al livello traccia
+                        if mixed > 1.0:
+                            mixed = 1.0
+                        elif mixed < -1.0:
+                            mixed = -1.0
+                        track_buffer[idx] = mixed
+            
+            # Applica effetti per-traccia (se presenti)
+            if project is not None and hasattr(project, 'tracks'):
+                try:
+                    if 0 <= int(track_index) < len(project.tracks):
+                        tr = project.tracks[int(track_index)]
+                        fx_chain = getattr(tr, 'effects', None)
+                        if fx_chain and getattr(fx_chain, 'slots', None):
+                            track_buffer = fx_chain.process(track_buffer)
+                except Exception as e:
+                    # Fail-safe: ignore any effect processing errors
+                    print(f"Warning: Failed to apply effects on track {track_index}: {e}")
+            
+            # Applica volume della traccia
             track_volume = 1.0
             if track_volumes is not None and track_index in track_volumes:
                 track_volume = float(track_volumes[track_index])
             
-            # Ottieni il volume del clip
-            clip_volume = getattr(clip, 'volume', 1.0)
-            
-            # Volume combinato (traccia * clip)
-            combined_volume = track_volume * clip_volume
-            
-            # mix semplice (somma e clamp) con applicazione del volume
-            for i, s in enumerate(clip_samples):
-                idx = out_start_idx + i
-                if 0 <= idx < total_samples:
-                    # Applica il volume combinato
-                    sample_with_volume = float(s) * combined_volume
-                    mixed = output[idx] + sample_with_volume
-                    if mixed > 1.0:
-                        mixed = 1.0
-                    elif mixed < -1.0:
-                        mixed = -1.0
-                    output[idx] = mixed
+            # Mixa nel buffer finale
+            for i in range(total_samples):
+                sample_with_track_volume = track_buffer[i] * track_volume
+                mixed = output[i] + sample_with_track_volume
+                # Clamp al master
+                if mixed > 1.0:
+                    mixed = 1.0
+                elif mixed < -1.0:
+                    mixed = -1.0
+                output[i] = mixed
+        
         return output

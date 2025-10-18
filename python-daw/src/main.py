@@ -75,7 +75,7 @@ def main():
     print(f"Rendered offline window samples: {len(window)}")
 
     # Real-time player (graceful fallback if sounddevice/numpy are missing)
-    player = TimelinePlayer(timeline, sample_rate=sr, mixer=mixer)
+    player = TimelinePlayer(timeline, sample_rate=sr, mixer=mixer, project=project)
 
     # Set up the main user interface
     transport = Transport()
