@@ -79,21 +79,28 @@ class TimelineCanvas:
         except Exception:
             hscroll = tk.Scrollbar(frame, orient="horizontal", command=self.canvas.xview)
             vscroll = tk.Scrollbar(frame, orient="vertical", command=self.canvas.yview)
-            
-        self.canvas.configure(xscrollcommand=hscroll.set, yscrollcommand=vscroll.set)
+        
+        # Use wrappers so we can update visibility while syncing positions
+        self.canvas.configure(xscrollcommand=self._on_xscroll_change, yscrollcommand=self._on_yscroll_change)
         
         self.canvas.grid(row=0, column=0, sticky="nsew")
-        hscroll.grid(row=1, column=0, sticky="ew")
-        vscroll.grid(row=0, column=1, sticky="ns")
+        # Do not show scrollbars initially; they will be shown only when needed
+        # hscroll and vscroll will be gridded dynamically
         
         frame.grid_rowconfigure(0, weight=1)
         frame.grid_columnconfigure(0, weight=1)
         
         self.scroll = hscroll
+        self.hscroll = hscroll
         self.vscroll = vscroll  # Save vertical scrollbar for synchronization
+        self._hscroll_visible = False
+        self._vscroll_visible = False
         
         # Mouse bindings
         self._bind_mouse_events()
+
+        # Update scrollbar visibility on resize
+        self.canvas.bind('<Configure>', lambda e: self._update_scrollbars())
 
     def _bind_mouse_events(self):
         """Bind mouse events for clip interaction."""
@@ -103,10 +110,23 @@ class TimelineCanvas:
         # Mouse wheel for scrolling
         def on_wheel(event):
             try:
+                # Determine if scrolling is needed based on content
+                bbox = self.canvas.bbox('all') or (0, 0, 0, 0)
+                content_w = max(0, bbox[2] - bbox[0])
+                content_h = max(0, bbox[3] - bbox[1])
+                cw = max(1, self.canvas.winfo_width())
+                ch = max(1, self.canvas.winfo_height())
+                need_h = content_w > cw + 1
+                need_v = content_h > ch + 1
+
                 if event.state & 0x0001:  # Shift pressed - horizontal scroll
+                    if not need_h:
+                        return
                     delta = (event.delta or -event.num) / 120.0
                     self.canvas.xview_scroll(int(-delta * 3), 'units')
                 else:  # Normal wheel - vertical scroll
+                    if not need_v:
+                        return
                     delta = (event.delta or -event.num) / 120.0
                     self.canvas.yview_scroll(int(-delta), 'units')
             except Exception:
@@ -148,7 +168,8 @@ class TimelineCanvas:
     def compute_height(self):
         """Calculate timeline height based on track count."""
         tracks_count = max(1, len(getattr(self.mixer, 'tracks', [])))
-        return self.ruler_height + (self.track_height * tracks_count) + 20
+        # Avoid artificial padding that can create unnecessary scroll space
+        return self.ruler_height + (self.track_height * tracks_count)
 
     def redraw(self):
         """Redraw the entire timeline."""
@@ -162,12 +183,95 @@ class TimelineCanvas:
         
         self.canvas.config(scrollregion=(0, 0, width, height))
         
+        # If content fits, reset view to top/left to avoid stray offsets
+        try:
+            cw = max(1, self.canvas.winfo_width())
+            ch = max(1, self.canvas.winfo_height())
+            if width <= cw:
+                self.canvas.xview_moveto(0)
+            if height <= ch:
+                self.canvas.yview_moveto(0)
+        except Exception:
+            pass
+        
         self._draw_ruler(width)
         self._draw_grid(width, height)
         self._draw_track_lanes(width)
         self._draw_clips()
         self._draw_loop_markers(height)
         self._draw_cursor(height)
+
+        # Ensure scrollbars reflect current content
+        try:
+            self._update_scrollbars()
+        except Exception:
+            pass
+
+    def _on_xscroll_change(self, first, last):
+        """Sync horizontal scrollbar and possibly update visibility."""
+        if hasattr(self, 'hscroll') and self.hscroll:
+            try:
+                self.hscroll.set(first, last)
+            except Exception:
+                pass
+        # No heavy work here; visibility handled by _update_scrollbars
+        
+    def _on_yscroll_change(self, first, last):
+        """Sync vertical scrollbar and possibly update visibility."""
+        if hasattr(self, 'vscroll') and self.vscroll:
+            try:
+                self.vscroll.set(first, last)
+            except Exception:
+                pass
+        # No heavy work here; visibility handled by _update_scrollbars
+
+    def _update_scrollbars(self):
+        """Show/hide scrollbars based on content vs viewport size."""
+        if self.canvas is None:
+            return
+        # Determine content size from scrollregion
+        try:
+            bbox = self.canvas.bbox('all')
+            if not bbox:
+                return
+            content_w = max(0, bbox[2] - bbox[0])
+            content_h = max(0, bbox[3] - bbox[1])
+            cw = max(1, self.canvas.winfo_width())
+            ch = max(1, self.canvas.winfo_height())
+            need_h = content_w > cw + 1
+            need_v = content_h > ch + 1
+        except Exception:
+            return
+        
+        # Horizontal scrollbar
+        if need_h and not self._hscroll_visible:
+            try:
+                self.hscroll.grid(row=1, column=0, sticky='ew')
+                self._hscroll_visible = True
+            except Exception:
+                pass
+        elif not need_h and self._hscroll_visible:
+            try:
+                self.hscroll.grid_remove()
+                self._hscroll_visible = False
+                self.canvas.xview_moveto(0)
+            except Exception:
+                pass
+        
+        # Vertical scrollbar
+        if need_v and not self._vscroll_visible:
+            try:
+                self.vscroll.grid(row=0, column=1, sticky='ns')
+                self._vscroll_visible = True
+            except Exception:
+                pass
+        elif not need_v and self._vscroll_visible:
+            try:
+                self.vscroll.grid_remove()
+                self._vscroll_visible = False
+                self.canvas.yview_moveto(0)
+            except Exception:
+                pass
 
     def _draw_ruler(self, width):
         """Draw the time ruler at the top."""

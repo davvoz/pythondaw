@@ -920,6 +920,15 @@ class TrackControls:
     def _on_mousewheel(self, event):
         """Handle mouse wheel scrolling in sidebar."""
         if self.canvas:
+            # Only scroll if content height exceeds canvas height
+            try:
+                bbox = self.canvas.bbox("all") or (0, 0, 0, 0)
+                content_h = max(0, bbox[3] - bbox[1])
+                ch = max(1, self.canvas.winfo_height())
+                if content_h <= ch + 1:
+                    return
+            except Exception:
+                pass
             # Windows uses event.delta, divide by 120 for smooth scrolling
             self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
     
