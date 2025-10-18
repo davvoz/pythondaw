@@ -86,14 +86,17 @@ player.stop()
 time.sleep(0.5)
 
 # Add delay too
-print("\n5. Adding DELAY effect (60% wet)...")
-delay = Delay()
+print("\n5. Adding PROFESSIONAL DELAY effect (60% wet)...")
+delay = Delay(sample_rate=44100)
 delay.set_parameters({
-    "delay_time": 0.25,
-    "feedback": 0.6,
-    "mix": 0.6
+    "delay_time_ms": 250.0,  # 250ms delay
+    "feedback": 0.5,         # Moderate feedback
+    "mix": 0.6,              # 60% wet
+    "low_cut": 300.0,        # Cut below 300Hz
+    "high_cut": 6000.0,      # Cut above 6kHz
+    "ping_pong": 0.0         # No ping-pong for now
 })
-track.add_effect(delay, name="Delay", wet=0.6)
+track.add_effect(delay, name="Pro Delay", wet=0.6)
 
 print("   Updated effect chain:")
 for i, slot in enumerate(track.effects.slots):

@@ -275,13 +275,21 @@ class EffectParametersDialog:
         elif "q" in name_lower:
             return 0.1, 10.0, 0.1
         elif "feedback" in name_lower or "damping" in name_lower:
-            return 0.0, 1.0, 0.01
+            return 0.0, 0.95, 0.01  # Max 0.95 to prevent runaway feedback
         elif "mix" in name_lower or "wet" in name_lower or "dry" in name_lower:
             return 0.0, 1.0, 0.01
         elif "room" in name_lower or "size" in name_lower:
             return 0.0, 1.0, 0.01
-        elif "delay" in name_lower and "time" in name_lower:
-            return 0.0, 2.0, 0.01  # seconds
+        elif "ping_pong" in name_lower or "pingpong" in name_lower:
+            return 0.0, 1.0, 0.01  # 0 = off, 1 = full ping-pong
+        elif "delay_time_ms" in name_lower or "delay" in name_lower and "ms" in name_lower:
+            return 1.0, 2000.0, 1.0  # milliseconds (1ms - 2000ms / 2 seconds)
+        elif "low_cut" in name_lower or "lowcut" in name_lower or "highpass" in name_lower:
+            return 20.0, 2000.0, 10.0  # Hz - high-pass filter
+        elif "high_cut" in name_lower or "highcut" in name_lower or "lowpass" in name_lower:
+            return 1000.0, 20000.0, 100.0  # Hz - low-pass filter
+        elif "delay" in name_lower and "time" in name_lower and "ms" not in name_lower:
+            return 0.0, 2.0, 0.01  # seconds (legacy)
         
         # Default ranges based on current value
         if isinstance(current_value, int):
