@@ -63,7 +63,15 @@ class TrackControls:
         # Initialize style
         self.style = ttk.Style()
         
-        # Scrollable container for track list
+        # Master track pinned (non-scrolling)
+        self.master_container = ttk.Frame(self.parent, style="Sidebar.TFrame")
+        self.master_container.pack(fill="x", padx=0, pady=(0, 0))
+        
+        # Separator after master
+        self._master_separator = tk.Frame(self.parent, height=2, bg="#404040")
+        self._master_separator.pack(fill="x", padx=0, pady=(0, 0))
+        
+        # Scrollable container for regular tracks
         tracks_outer = ttk.Frame(self.parent, style="Sidebar.TFrame")
         tracks_outer.pack(fill="both", expand=True, padx=0, pady=0)
         
@@ -135,14 +143,19 @@ class TrackControls:
         self.meter_R.pack(side="left", fill="x", expand=True, padx=0)
     
     def populate_tracks(self, timeline=None):
-        """Populate track list from mixer - fixed controls."""
+        """Populate track list from mixer - Master pinned, tracks scrollable."""
         if self.mixer is None or self.track_list_container is None:
             print(f"populate_tracks: mixer={self.mixer}, container={self.track_list_container}")
             return
         
         print(f"populate_tracks: Found {len(self.mixer.tracks)} tracks in mixer")
         
-        # Clear existing widgets
+        # Clear existing widgets in both containers
+        # Master (pinned)
+        if hasattr(self, 'master_container') and self.master_container is not None:
+            for widget in self.master_container.winfo_children():
+                widget.destroy()
+        # Tracks (scrollable)
         for widget in self.track_list_container.winfo_children():
             widget.destroy()
         self.track_frames.clear()
@@ -150,14 +163,14 @@ class TrackControls:
         self.mute_buttons.clear()
         self.solo_buttons.clear()
         
-        # Add Master first (no M/S buttons)
-        self._create_track_row("master", "Master", None, show_ms=False)
+        # Add Master to pinned container (no M/S buttons)
+        self._create_track_row("master", "Master", None, show_ms=False, container=getattr(self, 'master_container', None))
         
         # Add all tracks
         for idx, track in enumerate(self.mixer.tracks):
             name = track.get("name", f"Track {idx+1}")
             color = track.get("color", "#3b82f6")
-            self._create_track_row(idx, name, color, show_ms=True)
+            self._create_track_row(idx, name, color, show_ms=True, container=self.track_list_container)
         
         print(f"populate_tracks: Created {len(self.track_frames)} track rows")
     
