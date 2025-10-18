@@ -90,6 +90,7 @@ class TimelineCanvas:
         frame.grid_columnconfigure(0, weight=1)
         
         self.scroll = hscroll
+        self.vscroll = vscroll  # Save vertical scrollbar for synchronization
         
         # Mouse bindings
         self._bind_mouse_events()
@@ -99,12 +100,15 @@ class TimelineCanvas:
         if self.canvas is None:
             return
             
-        # Mouse wheel for horizontal scroll with Shift
+        # Mouse wheel for scrolling
         def on_wheel(event):
             try:
-                if event.state & 0x0001:  # Shift pressed
+                if event.state & 0x0001:  # Shift pressed - horizontal scroll
                     delta = (event.delta or -event.num) / 120.0
                     self.canvas.xview_scroll(int(-delta * 3), 'units')
+                else:  # Normal wheel - vertical scroll
+                    delta = (event.delta or -event.num) / 120.0
+                    self.canvas.yview_scroll(int(-delta), 'units')
             except Exception:
                 pass
                 
@@ -114,6 +118,18 @@ class TimelineCanvas:
         self.canvas.bind('<ButtonRelease-1>', self.on_release)
         self.canvas.bind('<Button-3>', self.on_right_click)
         self.canvas.bind('<Motion>', self.on_motion)
+    
+    def set_vscroll_callback(self, callback):
+        """Set callback to be called when vertical scroll position changes.
+        
+        Args:
+            callback: Function to call with scroll position (first, last)
+        """
+        if self.canvas:
+            def on_scroll(*args):
+                callback(*args)
+                self.vscroll.set(*args)
+            self.canvas.configure(yscrollcommand=on_scroll)
 
     def compute_width(self):
         """Calculate timeline width based on content."""

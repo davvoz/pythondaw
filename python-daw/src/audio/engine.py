@@ -22,7 +22,8 @@ class AudioEngine:
     # Offline rendering for a time window
     def render_window(self, timeline, start_time: float, duration: float, sample_rate: int, 
                      track_volumes: Optional[Dict[int, float]] = None,
-                     solo_tracks: Optional[List[int]] = None) -> List[float]:
+                     solo_tracks: Optional[List[int]] = None,
+                     mixer=None) -> List[float]:
         """Render a mono buffer for [start_time, start_time+duration).
 
         Combina i clip sovrapposti sommandoli e clampando in [-1, 1].
@@ -35,6 +36,7 @@ class AudioEngine:
             sample_rate: Sample rate in Hz
             track_volumes: Dictionary opzionale {track_index: volume} con i volumi delle tracce (0.0-1.0)
             solo_tracks: List opzionale di track indices da renderizzare in solo (ignora altre tracce)
+            mixer: Mixer opzionale per controllare mute/solo state
         """
         if duration <= 0:
             return []
@@ -45,6 +47,11 @@ class AudioEngine:
             # Se solo_tracks è specificato, salta le tracce che non sono in lista
             if solo_tracks is not None and track_index not in solo_tracks:
                 continue
+            
+            # Check mute/solo state from mixer
+            if mixer is not None and hasattr(mixer, 'should_play_track'):
+                if not mixer.should_play_track(track_index):
+                    continue  # Skip muted/non-soloed tracks
                 
             # determina gli intervalli di sovrapposizione
             overlap_start = max(start_time, clip.start_time)

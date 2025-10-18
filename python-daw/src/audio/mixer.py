@@ -13,7 +13,7 @@ class Mixer:
         self.master_volume = 1.0
         self._track_counter = 0  # per nomi auto-generati
 
-    def add_track(self, name=None, volume=1.0, pan=0.0, color=None):
+    def add_track(self, name=None, volume=1.0, pan=0.0, color=None, mute=False, solo=False):
         """Add a new track to the mixer.
         
         Args:
@@ -21,6 +21,8 @@ class Mixer:
             volume: Initial volume (0.0-1.0)
             pan: Initial pan (-1.0 to 1.0)
             color: Hex color string (e.g., "#3b82f6") or None for auto
+            mute: Track is muted (default False)
+            solo: Track is soloed (default False)
         """
         if name is None:
             self._track_counter += 1
@@ -35,7 +37,9 @@ class Mixer:
             "name": name, 
             "volume": float(volume), 
             "pan": float(pan),
-            "color": color
+            "color": color,
+            "mute": bool(mute),
+            "solo": bool(solo)
         })
 
     def remove_track(self, name):
@@ -81,3 +85,38 @@ class Mixer:
         """Set track color by index."""
         if 0 <= index < len(self.tracks):
             self.tracks[index]["color"] = color
+    
+    def toggle_mute(self, index: int):
+        """Toggle mute state for a track."""
+        if 0 <= index < len(self.tracks):
+            self.tracks[index]["mute"] = not self.tracks[index].get("mute", False)
+            return self.tracks[index]["mute"]
+        return False
+    
+    def toggle_solo(self, index: int):
+        """Toggle solo state for a track."""
+        if 0 <= index < len(self.tracks):
+            self.tracks[index]["solo"] = not self.tracks[index].get("solo", False)
+            return self.tracks[index]["solo"]
+        return False
+    
+    def has_soloed_tracks(self) -> bool:
+        """Check if any track is soloed."""
+        return any(t.get("solo", False) for t in self.tracks)
+    
+    def should_play_track(self, index: int) -> bool:
+        """Determine if a track should be played based on mute/solo state.
+        
+        Logic:
+        - If track is muted: don't play
+        - If any track is soloed: play only soloed tracks
+        - Otherwise: play all non-muted tracks
+        """
+        if 0 <= index < len(self.tracks):
+            track = self.tracks[index]
+            if track.get("mute", False):
+                return False
+            if self.has_soloed_tracks():
+                return track.get("solo", False)
+            return True
+        return False

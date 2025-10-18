@@ -194,19 +194,16 @@ class MainWindow:
             font=("Segoe UI", 11, "bold")
         ).pack(anchor="w")
         
-        # Tracks header with buttons
-        tracks_header = ttk.Frame(sidebar, style="Sidebar.TFrame")
-        tracks_header.pack(fill="x", padx=12, pady=(8, 4))
-        
-        btn_container = ttk.Frame(tracks_header, style="Sidebar.TFrame")
-        btn_container.pack(side="right")
+        # Add track button
+        btn_container = ttk.Frame(sidebar, style="Sidebar.TFrame")
+        btn_container.pack(fill="x", padx=12, pady=(4, 4))
         ttk.Button(
             btn_container, text="+",
             command=self._add_track_dialog,
             style="Tool.TButton", width=3
-        ).pack(side="left", padx=(0, 2))
+        ).pack(side="left")
         
-        # Create track controls (pass timeline/project and redraw callback)
+        # Create track controls
         self._track_controls = TrackControls(
             sidebar,
             self.mixer,
@@ -1563,7 +1560,8 @@ Samples: {len(clip.buffer)}
                 start_time=start_time,
                 duration=duration,
                 sample_rate=sample_rate,
-                track_volumes=track_volumes
+                track_volumes=track_volumes,
+                mixer=self.mixer  # Pass mixer for mute/solo state
             )
             
             if not audio_buffer or len(audio_buffer) == 0:

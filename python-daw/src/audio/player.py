@@ -115,6 +115,11 @@ class TimelinePlayer:
 
         # Mix clips overlapping this window
         for track_index, clip in self.timeline.get_clips_for_range(start_t, end_t):
+            # Check mute/solo state
+            if self.mixer is not None and hasattr(self.mixer, 'should_play_track'):
+                if not self.mixer.should_play_track(track_index):
+                    continue  # Skip this track
+            
             # compute overlap
             overlap_start = max(start_t, clip.start_time)
             overlap_end = min(end_t, clip.end_time)

@@ -49,6 +49,15 @@ class ThemeManager:
                             font=("Segoe UI", 9))
             style.map("Tool.TButton",
                      background=[("active", "#4a4a4a"), ("pressed", "#353535")])
+            
+            # Active Tool Button (for mute/solo when engaged)
+            style.configure("Active.Tool.TButton",
+                            background="#dc2626",  # Red for active state
+                            foreground="#ffffff",
+                            padding=(10, 5),
+                            font=("Segoe UI", 9, "bold"))
+            style.map("Active.Tool.TButton",
+                     background=[("active", "#b91c1c"), ("pressed", "#991b1b")])
 
             # Status bar
             style.configure("Status.TLabel",
