@@ -1,19 +1,39 @@
-"""Timeline canvas management for visual timeline rendering and clip interaction."""
+"""Timeline canvas management for visual timeline rendering and clip interaction.
+
+Refactored to use modular components for better separation of concerns.
+"""
 
 try:
     import tkinter as tk
 except Exception:  # pragma: no cover
     tk = None
 
+# Import timeline components
+from .timeline.geometry import TimelineGeometry
+from .timeline.renderers import (
+    RulerRenderer, GridRenderer, TrackRenderer,
+    ClipRenderer, CursorRenderer, LoopRenderer
+)
+from .timeline.services import SnapService, ClipboardService
+from .timeline.controllers import (
+    DragController, ResizeController, BoxSelectController,
+    LoopMarkerController, TrackControlsController
+)
+
 
 class TimelineCanvas:
-    """Manages the timeline canvas, rendering, and clip interactions."""
+    """Manages the timeline canvas, rendering, and clip interactions.
+    
+    This class orchestrates the various timeline components and delegates
+    rendering and interaction logic to specialized modules.
+    """
 
     def __init__(self, parent, project=None, mixer=None, timeline=None, player=None):
         self.project = project
         self.mixer = mixer
         self.timeline = timeline
         self.player = player
+        
         # Callback for notifying selection changes to parent (MainWindow)
         self.on_track_selected = None
         
@@ -23,44 +43,45 @@ class TimelineCanvas:
         self.scroll = None
         self.cursor_id = None
         
-        # Display settings
-        self.px_per_sec = 200  # pixels per second
-        self.track_height = 80  # Increased for inline controls
-        self.left_margin = 280  # Width of controls area
-        self.ruler_height = 32
+        # Initialize geometry and renderers
+        self.geometry = TimelineGeometry(
+            px_per_sec=200,
+            track_height=80,
+            ruler_height=32,
+            left_margin=280
+        )
         
-        # Clip interaction state
-        self.selected_clip = None  # (track_index, clip_object) - for single selection compatibility
+        self.ruler_renderer = RulerRenderer(self.geometry)
+        self.grid_renderer = GridRenderer(self.geometry)
+        self.track_renderer = TrackRenderer(self.geometry)
+        self.clip_renderer = ClipRenderer(self.geometry)
+        self.cursor_renderer = CursorRenderer(self.geometry)
+        self.loop_renderer = LoopRenderer(self.geometry)
+        
+        # Initialize services
+        self.snap_service = SnapService(project)
+        self.clipboard_service = ClipboardService()
+        
+        # Initialize controllers
+        self.drag_controller = DragController(self.geometry, self.snap_service)
+        self.resize_controller = ResizeController(self.geometry, self.snap_service)
+        self.box_select_controller = BoxSelectController(self.geometry)
+        self.loop_marker_controller = LoopMarkerController(self.geometry, self.snap_service)
+        self.track_controls_controller = TrackControlsController(self.geometry, self.geometry.left_margin)
+        
+        # Set invalidation callbacks for controllers
+        self.drag_controller.on_invalidate = self.redraw
+        self.resize_controller.on_invalidate = self.redraw
+        self.loop_marker_controller.on_invalidate = self.redraw
+        self.track_controls_controller.on_invalidate = self.redraw
+        
+        # Clip selection state
+        self.selected_clip = None  # (track_index, clip_object) - for backward compatibility
         self.selected_clips = []  # [(track_index, clip_object), ...] - for multiple selection
-        self.drag_data = None  # {"clip": clip, "track": idx, "start_x": x, "start_time": t}
-        self.resize_data = None  # {"clip": clip, "track": idx, "edge": "left"|"right", ...}
         self.clip_canvas_ids = {}  # {canvas_id: (track_idx, clip_obj)}
-        self.resize_handle_size = 12  # Larghezza zona resize ai bordi (più grande = più facile)
-        
-        # Clipboard for copy/paste
-        self.clipboard = []  # [(track_index, clip_data), ...]
-        
-        # Paste cursor position (where to paste clips)
-        self.paste_position = 0.0  # Time in seconds where clips will be pasted
-        self.paste_cursor_visible = False  # Show visual indicator
-        
-        # Grid state
-        self.snap_enabled = False
-        self.grid_division = 0.25  # quarter notes by default
         
         # Loop selection
         self.loop_selection_start = None
-        
-        # Loop marker dragging
-        self.dragging_loop_marker = None  # "start" or "end"
-        
-        # Box selection (rectangular selection)
-        self.box_selection_start = None  # (x, y) start point of box selection
-        self.box_selection_rect = None  # Canvas rectangle ID for visual feedback
-        
-        # Track controls interaction state
-        self.dragging_volume = None  # {"track": idx, "start_x": x, "start_vol": vol}
-        self.dragging_pan = None  # {"track": idx, "start_x": x, "start_pan": pan}
         
         # Context menus (will be set by MainWindow)
         self.track_menu = None
@@ -69,6 +90,47 @@ class TimelineCanvas:
         self.selected_track_idx = None
 
         self._build_canvas(parent)
+    
+    # Backward compatibility properties
+    @property
+    def px_per_sec(self):
+        return self.geometry.px_per_sec
+    
+    @px_per_sec.setter
+    def px_per_sec(self, value):
+        self.geometry.px_per_sec = value
+    
+    @property
+    def track_height(self):
+        return self.geometry.track_height
+    
+    @property
+    def ruler_height(self):
+        return self.geometry.ruler_height
+    
+    @property
+    def left_margin(self):
+        return self.geometry.left_margin
+    
+    @property
+    def snap_enabled(self):
+        return self.snap_service.enabled
+    
+    @property
+    def grid_division(self):
+        return self.snap_service.grid_division
+    
+    @property
+    def clipboard(self):
+        return self.clipboard_service.clipboard
+    
+    @property
+    def paste_position(self):
+        return self.clipboard_service.paste_position
+    
+    @property
+    def paste_cursor_visible(self):
+        return self.clipboard_service.paste_cursor_visible
 
     def _build_canvas(self, parent):
         """Build the timeline canvas with fixed controls on left and scrollable timeline on right."""
@@ -252,24 +314,38 @@ class TimelineCanvas:
 
     def compute_width(self):
         """Calculate timeline width based on content (without left margin)."""
-        max_end = 5.0
-        try:
-            if self.timeline is not None:
-                for _, clip in self.timeline.all_placements():
-                    if getattr(clip, 'end_time', None) is not None:
-                        if clip.end_time > max_end:
-                            max_end = clip.end_time
-        except Exception:
-            pass
-        # Don't include left_margin since controls are in separate canvas
-        width = int(max_end * self.px_per_sec + 40)
-        return max(width, 800)
+        return self.geometry.compute_width(self.timeline, min_width=800)
 
     def compute_height(self):
         """Calculate timeline height based on track count."""
         tracks_count = max(1, len(getattr(self.mixer, 'tracks', [])))
-        # Avoid artificial padding that can create unnecessary scroll space
-        return self.ruler_height + (self.track_height * tracks_count)
+        return self.geometry.compute_height(tracks_count)
+    
+    # Backward compatibility properties
+    @property
+    def clipboard(self):
+        """Access clipboard data (backward compatibility)."""
+        return self.clipboard_service.clipboard
+    
+    @property
+    def paste_position(self):
+        """Access paste position (backward compatibility)."""
+        return self.clipboard_service.paste_position
+    
+    @paste_position.setter
+    def paste_position(self, value: float):
+        """Set paste position (backward compatibility)."""
+        self.clipboard_service.paste_position = value
+    
+    @property
+    def paste_cursor_visible(self):
+        """Access paste cursor visibility (backward compatibility)."""
+        return self.clipboard_service.paste_cursor_visible
+    
+    @paste_cursor_visible.setter
+    def paste_cursor_visible(self, value: bool):
+        """Set paste cursor visibility (backward compatibility)."""
+        self.clipboard_service.paste_cursor_visible = value
 
     def redraw(self):
         """Redraw the entire timeline."""
@@ -959,56 +1035,18 @@ class TimelineCanvas:
         except Exception:
             pass
         
-        cursor_x = cur * self.px_per_sec  # No left_margin offset
-        
-        # Cursor line
-        self.cursor_id = self.canvas.create_line(
-            cursor_x, 0, cursor_x, height,
-            fill="#ef4444", width=3
-        )
-        
-        # Cursor head (triangle)
-        self.canvas.create_polygon(
-            cursor_x - 6, 0,
-            cursor_x + 6, 0,
-            cursor_x, 10,
-            fill="#ef4444", outline=""
-        )
+        # Use cursor renderer
+        self.cursor_id = self.cursor_renderer.draw(self.canvas, height, cur)
         
         # Draw paste cursor if visible
-        if self.paste_cursor_visible and self.clipboard:
-            self._draw_paste_cursor(height)
+        if self.clipboard_service.paste_cursor_visible and self.clipboard_service.has_clips():
+            self.clipboard_service.draw_paste_cursor(self.canvas, self.geometry, height)
 
     def _draw_paste_cursor(self, height):
-        """Draw the paste position cursor."""
-        if self.canvas is None:
-            return
-        
-        paste_x = self.paste_position * self.px_per_sec  # No left_margin offset
-        
-        # Paste cursor line (dashed, different color)
-        self.canvas.create_line(
-            paste_x, self.ruler_height, paste_x, height,
-            fill="#10b981", width=2, dash=(5, 3), tags="paste_cursor"
-        )
-        
-        # Paste cursor indicator (triangle pointing down)
-        self.canvas.create_polygon(
-            paste_x - 8, self.ruler_height,
-            paste_x + 8, self.ruler_height,
-            paste_x, self.ruler_height + 12,
-            fill="#10b981", outline="#065f46", width=2, tags="paste_cursor"
-        )
-        
-        # Time label
-        time_str = f"{self.paste_position:.2f}s"
-        self.canvas.create_text(
-            paste_x, self.ruler_height + 22,
-            text=time_str,
-            fill="#10b981",
-            font=("Segoe UI", 8, "bold"),
-            tags="paste_cursor"
-        )
+        """Draw the paste position cursor - deprecated, now handled by ClipboardService."""
+        # Delegate to clipboard service
+        if self.canvas:
+            self.clipboard_service.draw_paste_cursor(self.canvas, self.geometry, height)
 
     def update_cursor(self, current_time):
         """Update cursor position."""
@@ -1034,30 +1072,28 @@ class TimelineCanvas:
 
     def zoom(self, factor):
         """Zoom timeline by factor."""
-        self.px_per_sec = max(40, min(800, int(self.px_per_sec * factor)))
+        zoom_level = self.geometry.zoom(factor)
         self.redraw()
-        return self.px_per_sec / 200.0  # Return zoom value
+        return zoom_level
 
     def zoom_reset(self):
         """Reset zoom to default."""
-        self.px_per_sec = 200
+        self.geometry.zoom_reset()
         self.redraw()
 
     def set_snap(self, enabled):
         """Enable/disable snap to grid."""
-        self.snap_enabled = enabled
+        self.snap_service.set_enabled(enabled)
         self.redraw()
 
     def set_grid_division(self, division):
         """Set grid division (1.0 = bar, 0.25 = quarter, etc.)."""
-        self.grid_division = division
+        self.snap_service.set_grid_division(division)
         self.redraw()
 
     def snap_time(self, time):
         """Snap time to grid if enabled."""
-        if not self.snap_enabled or self.project is None:
-            return time
-        return self.project.snap_to_grid(time, self.grid_division)
+        return self.snap_service.snap_time(time)
 
     def _find_control_at(self, x, y):
         """Find which track control (button/slider) is at the given coordinates.
@@ -1066,54 +1102,7 @@ class TimelineCanvas:
             dict with 'type' (button/volume/pan), 'track_idx', and 'action' (mute/solo/fx)
             or None if not on a control
         """
-        if x >= self.left_margin:
-            return None  # Not in controls area
-        
-        if y <= self.ruler_height:
-            return None  # In ruler area
-        
-        # Calculate track index
-        track_idx = int((y - self.ruler_height) / self.track_height)
-        
-        if self.mixer is None or track_idx >= len(self.mixer.tracks):
-            return None
-        
-        # Calculate y position within track
-        y0 = self.ruler_height + track_idx * self.track_height
-        y_in_track = y - y0
-        
-        # Button positions (top-right of control area)
-        btn_y = 8
-        btn_x = self.left_margin - 95
-        
-        # Check buttons (M/S/FX)
-        if btn_y <= y_in_track <= btn_y + 18:
-            # Mute button
-            if btn_x <= x <= btn_x + 20:
-                return {'type': 'button', 'track_idx': track_idx, 'action': 'mute'}
-            # Solo button
-            elif btn_x + 25 <= x <= btn_x + 45:
-                return {'type': 'button', 'track_idx': track_idx, 'action': 'solo'}
-            # FX button
-            elif btn_x + 50 <= x <= btn_x + 72:
-                return {'type': 'button', 'track_idx': track_idx, 'action': 'fx'}
-        
-        # Volume slider
-        vol_y = 35
-        vol_x = 40
-        vol_width = self.left_margin - 100
-        
-        if vol_y - 4 <= y_in_track <= vol_y + 4:
-            if vol_x <= x <= vol_x + vol_width:
-                return {'type': 'volume', 'track_idx': track_idx}
-        
-        # Pan slider
-        pan_y = 55
-        if pan_y - 4 <= y_in_track <= pan_y + 4:
-            if vol_x <= x <= vol_x + vol_width:
-                return {'type': 'pan', 'track_idx': track_idx}
-        
-        return None
+        return self.track_controls_controller.find_control_at(x, y, self.mixer)
 
     # Mouse event handlers
     def on_click(self, event):
@@ -1142,7 +1131,9 @@ class TimelineCanvas:
             y = event.y  # ruler_canvas doesn't scroll vertically
             
             # Check if clicking on loop markers
-            if self._check_loop_marker_click_on_ruler(x, y):
+            marker = self.loop_marker_controller.check_loop_marker_hit(x, y, self.player)
+            if marker:
+                self.loop_marker_controller.start_drag(marker)
                 return
             return
         
@@ -1153,13 +1144,15 @@ class TimelineCanvas:
         x = self.canvas.canvasx(event.x)
         y = self.canvas.canvasy(event.y)
         
-        # Check if clicking on loop markers (legacy, now on ruler)
-        if self._check_loop_marker_click(x, y):
+        # Check if clicking on loop markers (legacy, for main canvas)
+        marker = self.loop_marker_controller.check_loop_marker_hit(x, y, self.player)
+        if marker:
+            self.loop_marker_controller.start_drag(marker)
             return
         
-        # Check for loop region selection with Shift
-        if event.state & 0x0001:  # Shift key
-            time = x / self.px_per_sec  # No left_margin offset needed anymore
+        # Check for loop region selection with Shift - only in ruler area
+        if event.state & 0x0001 and y <= self.ruler_height:  # Shift key in ruler
+            time = self.geometry.x_to_time(x)
             self.loop_selection_start = max(0, time)
             return
         
@@ -1171,21 +1164,13 @@ class TimelineCanvas:
         
         if clicked_clip:
             track_idx, clip = clicked_clip
-            clip_x0 = clip.start_time * self.px_per_sec  # No left_margin offset
-            clip_x1 = clip.end_time * self.px_per_sec
             
-            # Check for edge resize con zona più ampia e priorità maggiore
-            resize_edge = self._get_resize_edge(x, clip_x0, clip_x1)
+            # Check for edge resize
+            resize_edge = self.resize_controller.check_resize_edge(x, clip, track_idx)
             
             if resize_edge and not ctrl_pressed:
-                # Modalità resize - ha priorità sul drag
-                self.resize_data = {
-                    "clip": clip, "track": track_idx,
-                    "edge": resize_edge,
-                    "orig_start": clip.start_time,
-                    "orig_end": clip.end_time,
-                    "start_x": x
-                }
+                # Start resize mode
+                self.resize_controller.start_resize(clip, track_idx, resize_edge)
                 # Assicurati che la clip sia selezionata
                 if not any(c == clip for _, c in self.selected_clips):
                     self.select_clip(track_idx, clip)
@@ -1197,31 +1182,30 @@ class TimelineCanvas:
                     self.toggle_clip_selection(track_idx, clip)
                 else:
                     # Start drag if not multi-selecting
-                    self.drag_data = {
-                        "clip": clip, "track": track_idx,
-                        "start_x": x, "start_time": clip.start_time
-                    }
+                    self.drag_controller.start_drag(clip, track_idx, x)
                     self.select_clip(track_idx, clip)
         else:
             # Clicked on empty area
+            
+            # Check for Shift key first - box selection (only in track area, not ruler)
+            if event.state & 0x0001 and y > self.ruler_height:  # Shift key in track area
+                self.box_select_controller.start_selection(x, y)
+                print(f"📦 Box selection started at ({x:.1f}, {y:.1f})")
+                return
+            
+            # Clear selection if not holding Ctrl
             if not ctrl_pressed:
                 self.clear_selection()
             
-            # Start box selection if in track area (not in ruler)
-            if y > self.ruler_height:
-                self.box_selection_start = (x, y)
-                # Don't set paste position during box selection start
-            
-            # Set paste position if clipboard has content (only if not starting box selection)
-            elif self.clipboard:
-                time = (x - self.left_margin) / self.px_per_sec
-                self.paste_position = max(0, self.snap_time(time))
-                self.paste_cursor_visible = True
+            # Check if we have clipboard content - set paste position
+            if self.clipboard and y > self.ruler_height:
+                time = self.geometry.x_to_time(x)
+                self.clipboard_service.set_paste_position(max(0, self.snap_time(time)), visible=True)
                 self.redraw()
-                print(f"📍 Paste position set to {self.paste_position:.2f}s (click here or press Ctrl+V to paste)")
-            elif not self.clipboard:
-                # Hide paste cursor if clipboard is empty
-                self.paste_cursor_visible = False
+                print(f"📍 Paste position set to {self.clipboard_service.paste_position:.2f}s (press Ctrl+V to paste)")
+            else:
+                # No clipboard or clicked in ruler - hide paste cursor
+                self.clipboard_service.paste_cursor_visible = False
                 self.redraw()
     
     def _handle_control_click(self, control, x, y):
@@ -1241,21 +1225,13 @@ class TimelineCanvas:
             self.select_track(track_idx)
         
         elif control_type == 'volume':
-            # Start volume drag
-            self.dragging_volume = {
-                'track': track_idx,
-                'start_x': x,
-                'start_vol': self.mixer.tracks[track_idx].get('volume', 1.0)
-            }
+            # Start volume drag using controller
+            self.track_controls_controller.start_volume_drag(track_idx, x, self.mixer)
             self.select_track(track_idx)
         
         elif control_type == 'pan':
-            # Start pan drag
-            self.dragging_pan = {
-                'track': track_idx,
-                'start_x': x,
-                'start_pan': self.mixer.tracks[track_idx].get('pan', 0.0)
-            }
+            # Start pan drag using controller
+            self.track_controls_controller.start_pan_drag(track_idx, x, self.mixer)
             self.select_track(track_idx)
     
     def _toggle_mute(self, track_idx):
@@ -1309,8 +1285,8 @@ class TimelineCanvas:
         # Handle drag on ruler canvas (for loop markers)
         if hasattr(self, 'ruler_canvas') and widget == self.ruler_canvas:
             x = self.ruler_canvas.canvasx(event.x)
-            if self.dragging_loop_marker is not None:
-                self._handle_loop_marker_drag(x)
+            if self.loop_marker_controller.is_dragging():
+                self.loop_marker_controller.update_drag(x, self.player)
             return
         
         if self.canvas is None:
@@ -1320,17 +1296,17 @@ class TimelineCanvas:
         y = self.canvas.canvasy(event.y)
         
         # Drag loop marker
-        if self.dragging_loop_marker is not None:
-            self._handle_loop_marker_drag(x)
+        if self.loop_marker_controller.is_dragging():
+            self.loop_marker_controller.update_drag(x, self.player)
             return
         
         # Drag volume slider
-        if self.dragging_volume is not None:
+        if self.track_controls_controller.dragging_volume is not None:
             self._handle_volume_drag(x)
             return
         
         # Drag pan slider
-        if self.dragging_pan is not None:
+        if self.track_controls_controller.dragging_pan is not None:
             self._handle_pan_drag(x)
             return
         
@@ -1339,14 +1315,14 @@ class TimelineCanvas:
             # Disegna preview del loop durante il drag
             self.canvas.delete("loop_preview")
             
-            end_time = x / self.px_per_sec  # No left_margin offset
+            end_time = self.geometry.x_to_time(x)
             end_time = max(0, end_time)
             
             start_time = self.loop_selection_start
             
             # Visualizza l'area che sarà selezionata
-            loop_x_start = min(start_time, end_time) * self.px_per_sec  # No left_margin offset
-            loop_x_end = max(start_time, end_time) * self.px_per_sec
+            loop_x_start = self.geometry.time_to_x(min(start_time, end_time))
+            loop_x_end = self.geometry.time_to_x(max(start_time, end_time))
             
             height = self.compute_height()
             self.canvas.create_rectangle(
@@ -1358,79 +1334,30 @@ class TimelineCanvas:
             return
         
         # Box selection (rectangular clip selection)
-        if self.box_selection_start is not None:
-            self._handle_box_selection_drag(x, y)
+        if self.box_select_controller.is_selecting():
+            self.box_select_controller.update_selection(self.canvas, x, y)
             return
         
-        if self.resize_data:
-            self._handle_resize(x)
-        elif self.drag_data:
-            self._handle_drag(x, y)
+        if self.resize_controller.is_resizing():
+            self.resize_controller.update_resize(x)
+        elif self.drag_controller.is_dragging():
+            self.drag_controller.update_drag(x, y, self.mixer)
     
     def _handle_volume_drag(self, x):
         """Handle volume slider dragging."""
-        if self.dragging_volume is None or self.mixer is None:
-            return
-        
-        track_idx = self.dragging_volume['track']
-        if track_idx >= len(self.mixer.tracks):
-            return
-        
-        # Calculate new volume based on mouse position
-        vol_x = 40
-        vol_width = self.left_margin - 100
-        
-        # Clamp x to slider bounds
-        x = max(vol_x, min(x, vol_x + vol_width))
-        
-        # Calculate volume (0.0 to 1.0)
-        volume = (x - vol_x) / vol_width
-        volume = max(0.0, min(1.0, volume))
-        
-        # Update mixer
-        self.mixer.tracks[track_idx]['volume'] = volume
-        
-        # Redraw to show updated slider
-        self.redraw()
+        self.track_controls_controller.update_volume_drag(x, self.mixer)
     
     def _handle_pan_drag(self, x):
         """Handle pan slider dragging."""
-        if self.dragging_pan is None or self.mixer is None:
-            return
-        
-        track_idx = self.dragging_pan['track']
-        if track_idx >= len(self.mixer.tracks):
-            return
-        
-        # Calculate new pan based on mouse position
-        pan_x = 40
-        pan_width = self.left_margin - 100
-        center_x = pan_x + pan_width // 2
-        
-        # Clamp x to slider bounds
-        x = max(pan_x, min(x, pan_x + pan_width))
-        
-        # Calculate pan (-1.0 to 1.0)
-        pan = (x - center_x) / (pan_width / 2)
-        pan = max(-1.0, min(1.0, pan))
-        
-        # Snap to center if close
-        if abs(pan) < 0.05:
-            pan = 0.0
-        
-        # Update mixer
-        self.mixer.tracks[track_idx]['pan'] = pan
-        
-        # Redraw to show updated slider
-        self.redraw()
+        self.track_controls_controller.update_pan_drag(x, self.mixer)
 
     def on_release(self, event):
         """Handle mouse release."""
         widget = event.widget
         
         # Release loop marker drag
-        if self.dragging_loop_marker is not None:
-            self.dragging_loop_marker = None
+        if self.loop_marker_controller.is_dragging():
+            self.loop_marker_controller.end_drag()
             # Reset cursor on appropriate canvas
             if hasattr(self, 'ruler_canvas') and widget == self.ruler_canvas:
                 self.ruler_canvas.config(cursor="")
@@ -1439,27 +1366,30 @@ class TimelineCanvas:
             return
         
         # Release resize
-        if self.resize_data is not None:
-            clip = self.resize_data["clip"]
-            print(f"✓ Resize complete: {clip.name} | Start: {clip.start_time:.3f}s | Duration: {clip.duration:.3f}s")
-            self.resize_data = None
+        if self.resize_controller.is_resizing():
+            resize_data = self.resize_controller.end_resize()
+            if resize_data:
+                clip = resize_data["clip"]
+                print(f"✓ Resize complete: {clip.name} | Start: {clip.start_time:.3f}s | Duration: {clip.duration:.3f}s")
             self.canvas.config(cursor="")
             return
         
         # Release volume/pan dragging
-        if self.dragging_volume is not None:
-            track_idx = self.dragging_volume['track']
-            volume = self.mixer.tracks[track_idx].get('volume', 1.0)
-            print(f"🔊 Volume adjusted: Track {track_idx + 1} = {volume:.2f}")
-            self.dragging_volume = None
+        if self.track_controls_controller.dragging_volume is not None:
+            vol_data = self.track_controls_controller.end_volume_drag()
+            if vol_data:
+                track_idx = vol_data['track']
+                volume = self.mixer.tracks[track_idx].get('volume', 1.0)
+                print(f"🔊 Volume adjusted: Track {track_idx + 1} = {volume:.2f}")
             return
         
-        if self.dragging_pan is not None:
-            track_idx = self.dragging_pan['track']
-            pan = self.mixer.tracks[track_idx].get('pan', 0.0)
-            pan_text = "C" if abs(pan) < 0.05 else (f"L{abs(pan):.1f}" if pan < 0 else f"R{pan:.1f}")
-            print(f"🎚️ Pan adjusted: Track {track_idx + 1} = {pan_text}")
-            self.dragging_pan = None
+        if self.track_controls_controller.dragging_pan is not None:
+            pan_data = self.track_controls_controller.end_pan_drag()
+            if pan_data:
+                track_idx = pan_data['track']
+                pan = self.mixer.tracks[track_idx].get('pan', 0.0)
+                pan_text = "C" if abs(pan) < 0.05 else (f"L{abs(pan):.1f}" if pan < 0 else f"R{pan:.1f}")
+                print(f"🎚️ Pan adjusted: Track {track_idx + 1} = {pan_text}")
             return
         
         # Check loop region selection
@@ -1467,7 +1397,7 @@ class TimelineCanvas:
             self.canvas.delete("loop_preview")
             
             x = self.canvas.canvasx(event.x)
-            end_time = x / self.px_per_sec  # No left_margin offset
+            end_time = self.geometry.x_to_time(x)
             end_time = max(0, end_time)
             
             start = self.snap_time(min(self.loop_selection_start, end_time))
@@ -1485,12 +1415,20 @@ class TimelineCanvas:
             return
         
         # Box selection release
-        if self.box_selection_start is not None:
-            self._complete_box_selection()
+        if self.box_select_controller.is_selecting():
+            x = self.canvas.canvasx(event.x)
+            y = self.canvas.canvasy(event.y)
+            selected = self.box_select_controller.complete_selection(self.canvas, self.timeline, x, y)
+            if selected:
+                self.selected_clips = selected
+                self.selected_clip = selected[0] if selected else None
+                print(f"📦 Box selection: {len(selected)} clip(s) selected")
+            self.redraw()
             return
         
-        self.drag_data = None
-        self.resize_data = None
+        # Release drag
+        if self.drag_controller.is_dragging():
+            self.drag_controller.end_drag()
 
     def on_motion(self, event):
         """Handle mouse motion for cursor changes."""
@@ -1499,14 +1437,15 @@ class TimelineCanvas:
         # Handle motion on ruler canvas
         if hasattr(self, 'ruler_canvas') and widget == self.ruler_canvas:
             # Don't change cursor while dragging
-            if self.dragging_loop_marker:
+            if self.loop_marker_controller.is_dragging():
                 return
             
             x = self.ruler_canvas.canvasx(event.x)
             y = event.y
             
             # Check if hovering over loop markers on ruler
-            if self._is_over_loop_marker_on_ruler(x, y):
+            marker = self.loop_marker_controller.check_loop_marker_hit(x, y, self.player)
+            if marker:
                 self.ruler_canvas.config(cursor="sb_h_double_arrow")
             else:
                 self.ruler_canvas.config(cursor="")
@@ -1516,8 +1455,9 @@ class TimelineCanvas:
             return
         
         # Don't change cursor while dragging
-        if (self.drag_data or self.resize_data or self.dragging_loop_marker or 
-            self.dragging_volume or self.dragging_pan):
+        if (self.drag_controller.is_dragging() or self.resize_controller.is_resizing() or 
+            self.loop_marker_controller.is_dragging() or 
+            self.track_controls_controller.is_dragging()):
             return
             
         x = self.canvas.canvasx(event.x)
@@ -1534,7 +1474,8 @@ class TimelineCanvas:
             return
         
         # Check if hovering over loop markers
-        if self._is_over_loop_marker(x, y):
+        marker = self.loop_marker_controller.check_loop_marker_hit(x, y, self.player)
+        if marker:
             self.canvas.config(cursor="sb_h_double_arrow")
             return
         
@@ -1542,11 +1483,9 @@ class TimelineCanvas:
         
         if clicked_clip:
             track_idx, clip = clicked_clip
-            clip_x0 = clip.start_time * self.px_per_sec  # No left_margin offset
-            clip_x1 = clip.end_time * self.px_per_sec
             
-            # Usa la stessa logica di resize del click
-            resize_edge = self._get_resize_edge(x, clip_x0, clip_x1)
+            # Check if hovering over resize edge
+            resize_edge = self.resize_controller.check_resize_edge(x, clip, track_idx)
             
             if resize_edge:
                 self.canvas.config(cursor="sb_h_double_arrow")
@@ -1764,42 +1703,15 @@ class TimelineCanvas:
         if not self.selected_clips:
             return False
         
-        # Store clip data in clipboard
-        self.clipboard = []
+        # Use clipboard service to copy
+        current_time = float(getattr(self.player, "_current_time", 0.0)) if self.player else 0.0
+        num_copied = self.clipboard_service.copy_clips(self.selected_clips, current_time)
         
-        for track_idx, clip in self.selected_clips:
-            clip_data = {
-                'track_idx': track_idx,
-                'name': clip.name,
-                'buffer': clip.buffer,
-                'sample_rate': clip.sample_rate,
-                'start_time': clip.start_time,
-                'duration': clip.duration,
-                'color': clip.color,
-                'file_path': clip.file_path,
-                # Editing properties
-                'start_offset': getattr(clip, 'start_offset', 0.0),
-                'end_offset': getattr(clip, 'end_offset', 0.0),
-                'fade_in': getattr(clip, 'fade_in', 0.0),
-                'fade_in_shape': getattr(clip, 'fade_in_shape', 'linear'),
-                'fade_out': getattr(clip, 'fade_out', 0.0),
-                'fade_out_shape': getattr(clip, 'fade_out_shape', 'linear'),
-                'pitch_semitones': getattr(clip, 'pitch_semitones', 0.0),
-                'volume': getattr(clip, 'volume', 1.0),
-            }
-            self.clipboard.append(clip_data)
-        
-        # Show paste cursor at current playback position
-        if self.player:
-            self.paste_position = float(getattr(self.player, "_current_time", 0.0))
-        else:
-            self.paste_position = 0.0
-        self.paste_cursor_visible = True
         self.redraw()
         
-        print(f"📋 Copied {len(self.clipboard)} clip(s) to clipboard")
-        print(f"📍 Paste position set to {self.paste_position:.2f}s (click on timeline to change, or press Ctrl+V to paste)")
-        return True
+        print(f"📋 Copied {num_copied} clip(s) to clipboard")
+        print(f"📍 Paste position set to {self.clipboard_service.paste_position:.2f}s (click on timeline to change, or press Ctrl+V to paste)")
+        return num_copied > 0
     
     def paste_clips(self, at_time=None):
         """Paste clips from clipboard.
@@ -1808,60 +1720,22 @@ class TimelineCanvas:
             at_time: Optional time to paste at. If None, uses paste_position if set,
                     otherwise uses current playback time.
         """
-        if not self.clipboard:
+        if not self.clipboard_service.has_clips():
             return []
         
-        from src.audio.clip import AudioClip
-        
-        # Determine paste position (priority: at_time > paste_position > current_time)
+        # Determine paste position
         if at_time is None:
-            if self.paste_cursor_visible:
-                at_time = self.paste_position
+            if self.clipboard_service.paste_cursor_visible:
+                at_time = self.clipboard_service.paste_position
             else:
                 at_time = float(getattr(self.player, "_current_time", 0.0)) if self.player else 0.0
         
-        # Find the earliest clip in clipboard to calculate offset
-        min_start = min(clip_data['start_time'] for clip_data in self.clipboard)
-        time_offset = at_time - min_start
-        
-        pasted_clips = []
-        
-        for clip_data in self.clipboard:
-            # Create new clip with offset time
-            new_start_time = clip_data['start_time'] + time_offset
-            
-            new_clip = AudioClip(
-                clip_data['name'] + " (paste)",
-                clip_data['buffer'],
-                clip_data['sample_rate'],
-                new_start_time,
-                duration=clip_data['duration'],
-                color=clip_data['color'],
-                file_path=clip_data['file_path'],
-            )
-            
-            # Restore editing properties
-            new_clip.start_offset = clip_data['start_offset']
-            new_clip.end_offset = clip_data['end_offset']
-            new_clip.fade_in = clip_data['fade_in']
-            new_clip.fade_in_shape = clip_data['fade_in_shape']
-            new_clip.fade_out = clip_data['fade_out']
-            new_clip.fade_out_shape = clip_data['fade_out_shape']
-            new_clip.pitch_semitones = clip_data['pitch_semitones']
-            new_clip.volume = clip_data['volume']
-            
-            # Add to timeline
-            track_idx = clip_data['track_idx']
-            if self.timeline:
-                self.timeline.add_clip(track_idx, new_clip)
-                pasted_clips.append((track_idx, new_clip))
+        # Use clipboard service to paste
+        pasted_clips = self.clipboard_service.paste_clips(at_time, self.timeline)
         
         # Select pasted clips
         self.selected_clips = pasted_clips
         self.selected_clip = pasted_clips[0] if pasted_clips else None
-        
-        # Hide paste cursor after pasting
-        self.paste_cursor_visible = False
         
         self.redraw()
         print(f"📌 Pasted {len(pasted_clips)} clip(s) at {at_time:.3f}s")
