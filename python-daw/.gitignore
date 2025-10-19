@@ -138,3 +138,10 @@ Thumbs.db
 *.mp3
 *.flac
 *.ogg
+
+# Test directories and data
+test_debug_data/
+test_project_data/
+test_project_embedded_data/
+test_volumes_project_data/
+effects_demo_data/
