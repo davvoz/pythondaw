@@ -183,6 +183,8 @@ class MainWindow:
         
         # Set track context menu reference
         self._timeline_canvas.track_menu = self._track_menu
+        # When a track is selected on the canvas controls, update current track index
+        self._timeline_canvas.on_track_selected = self._set_current_track_index
         
         # Bind context menus to both canvases
         if self._timeline_canvas.canvas:
@@ -982,16 +984,55 @@ class MainWindow:
             )
             if not confirm:
                 return
-        
-        # Remove from mixer and timeline
-        self.mixer.tracks.pop(track_idx)
-        self.timeline.tracks.pop(track_idx)
-        
-        if self._timeline_canvas:
-            self._timeline_canvas.redraw()
-        
-        if self._status:
-            self._status.set(f"✓ Track '{track_name}' deleted")
+        try:
+            # Remove from timeline placements and shift indices after deleted track
+            if self.timeline and hasattr(self.timeline, '_placements'):
+                new_placements = []
+                for ti, clip in self.timeline._placements:
+                    if ti == track_idx:
+                        continue  # drop clips on deleted track
+                    elif ti > track_idx:
+                        new_placements.append((ti - 1, clip))
+                    else:
+                        new_placements.append((ti, clip))
+                self.timeline._placements = new_placements
+
+            # Remove from project.tracks if present
+            if self.project and hasattr(self.project, 'tracks') and track_idx < len(self.project.tracks):
+                try:
+                    self.project.tracks.pop(track_idx)
+                except Exception:
+                    pass
+
+            # Remove from mixer
+            self.mixer.tracks.pop(track_idx)
+
+            # Update selection to a valid index
+            if hasattr(self, '_current_track_idx'):
+                if self._current_track_idx is not None:
+                    if len(self.mixer.tracks) == 0:
+                        self._current_track_idx = None
+                    else:
+                        self._current_track_idx = max(0, min(self._current_track_idx, len(self.mixer.tracks) - 1))
+            # Reflect selection in canvas
+            if self._timeline_canvas and hasattr(self._timeline_canvas, 'selected_track_idx'):
+                sel = self._timeline_canvas.selected_track_idx
+                if sel is not None:
+                    if len(self.mixer.tracks) == 0:
+                        self._timeline_canvas.selected_track_idx = None
+                    else:
+                        self._timeline_canvas.selected_track_idx = max(0, min(sel if sel != track_idx else sel - 1, len(self.mixer.tracks) - 1))
+
+            # Redraw UI immediately
+            if self._timeline_canvas:
+                self._timeline_canvas.redraw()
+
+            if self._status:
+                self._status.set(f"✓ Track '{track_name}' deleted")
+        except Exception as e:
+            if self._status:
+                self._status.set(f"⚠ Failed to delete track: {e}")
+            print(f"Delete track error: {e}")
     
     def _duplicate_track(self, track_idx):
         """Duplicate a track with all its clips."""
@@ -1058,6 +1099,10 @@ class MainWindow:
         
         if self.mixer is None or track_idx >= len(self.mixer.tracks):
             return
+        # Select the track before opening the menu and update highlight
+        self._set_current_track_index(track_idx)
+        if hasattr(self._timeline_canvas, 'select_track'):
+            self._timeline_canvas.select_track(track_idx)
         
         # Show track context menu
         if self._track_menu:

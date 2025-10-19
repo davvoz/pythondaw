@@ -14,6 +14,8 @@ class TimelineCanvas:
         self.mixer = mixer
         self.timeline = timeline
         self.player = player
+        # Callback for notifying selection changes to parent (MainWindow)
+        self.on_track_selected = None
         
         # Canvas state
         self.canvas = None  # Main timeline canvas (scrollable)
@@ -62,7 +64,10 @@ class TimelineCanvas:
         
         # Context menus (will be set by MainWindow)
         self.track_menu = None
-        
+
+        # Track selection state
+        self.selected_track_idx = None
+
         self._build_canvas(parent)
 
     def _build_canvas(self, parent):
@@ -552,10 +557,13 @@ class TimelineCanvas:
             y0 = self.ruler_height + i * self.track_height
             y1 = y0 + self.track_height
             
-            # Controls area background
+            # Controls area background (highlight if selected)
+            is_selected = (self.selected_track_idx == i)
+            ctrl_bg = "#223a57" if is_selected else "#1a1a1a"
+            ctrl_outline = "#3b82f6" if is_selected else "#2d2d2d"
             self.controls_canvas.create_rectangle(
                 0, y0, self.left_margin, y1, 
-                fill="#1a1a1a", outline="#2d2d2d", width=1
+                fill=ctrl_bg, outline=ctrl_outline, width=1
             )
             
             # Track info
@@ -581,7 +589,7 @@ class TimelineCanvas:
             )
             self.controls_canvas.create_text(
                 28, y0 + 12, anchor="nw",
-                text=label, fill=track_color,
+                text=label, fill=("#ffffff" if is_selected else track_color),
                 font=("Segoe UI", 9, "bold")
             )
             
@@ -698,6 +706,30 @@ class TimelineCanvas:
                 text=pan_text, fill="#f5f5f5",
                 font=("Segoe UI", 7)
             )
+
+        # Make the entire controls area clickable for selection and controls actions
+        def on_controls_click(event):
+            x = self.controls_canvas.canvasx(event.x)
+            y = self.controls_canvas.canvasy(event.y)
+            if y <= self.ruler_height:
+                return
+            track_idx = int((y - self.ruler_height) / self.track_height)
+            if self.mixer is None or track_idx < 0 or track_idx >= len(self.mixer.tracks):
+                return
+            # If clicking on a control, handle it; otherwise just select the track
+            control = self._find_control_at(x, y)
+            if control:
+                try:
+                    self._handle_control_click(control, x, y)
+                except Exception:
+                    pass
+            else:
+                self.select_track(track_idx)
+        # Bind once (idempotent for multiple redraws because Tk keeps last binding)
+        try:
+            self.controls_canvas.bind('<Button-1>', on_controls_click)
+        except Exception:
+            pass
     
     def _draw_track_backgrounds(self, width):
         """Draw track backgrounds on the main timeline canvas."""
@@ -710,8 +742,11 @@ class TimelineCanvas:
             y0 = self.ruler_height + i * self.track_height
             y1 = y0 + self.track_height
             
-            # Alternating background for timeline area
-            bg_color = "#0d0d0d" if i % 2 == 0 else "#111111"
+            # Alternating background for timeline area (highlight if selected)
+            if self.selected_track_idx == i:
+                bg_color = "#0f172a"  # subtle blue-ish highlight
+            else:
+                bg_color = "#0d0d0d" if i % 2 == 0 else "#111111"
             self.canvas.create_rectangle(
                 0, y0, width, y1,
                 fill=bg_color, outline=""
@@ -1094,6 +1129,11 @@ class TimelineCanvas:
             control = self._find_control_at(x, y)
             if control:
                 self._handle_control_click(control, x, y)
+            else:
+                # Plain click on controls area selects the track
+                track_idx = int((y - self.ruler_height) / self.track_height)
+                if self.mixer is not None and 0 <= track_idx < len(self.mixer.tracks):
+                    self.select_track(track_idx)
             return
         
         # Click on ruler canvas - handle loop markers
@@ -1197,6 +1237,8 @@ class TimelineCanvas:
                 self._toggle_solo(track_idx)
             elif action == 'fx':
                 self._open_effects_dialog(track_idx)
+            # Buttons also imply selecting this track
+            self.select_track(track_idx)
         
         elif control_type == 'volume':
             # Start volume drag
@@ -1205,6 +1247,7 @@ class TimelineCanvas:
                 'start_x': x,
                 'start_vol': self.mixer.tracks[track_idx].get('volume', 1.0)
             }
+            self.select_track(track_idx)
         
         elif control_type == 'pan':
             # Start pan drag
@@ -1213,6 +1256,7 @@ class TimelineCanvas:
                 'start_x': x,
                 'start_pan': self.mixer.tracks[track_idx].get('pan', 0.0)
             }
+            self.select_track(track_idx)
     
     def _toggle_mute(self, track_idx):
         """Toggle mute for a track."""
@@ -1686,6 +1730,26 @@ class TimelineCanvas:
         self.selected_clips = []
         self.selected_clip = None
         self.redraw()
+
+    # Track selection helpers
+    def select_track(self, track_idx: int):
+        """Select a track by index, highlight it, and notify callback."""
+        try:
+            if self.mixer is None or track_idx < 0 or track_idx >= len(self.mixer.tracks):
+                return
+            self.selected_track_idx = int(track_idx)
+            # Notify parent if callback provided
+            if callable(self.on_track_selected):
+                try:
+                    self.on_track_selected(self.selected_track_idx)
+                except Exception:
+                    pass
+            self.redraw()
+        except Exception:
+            pass
+
+    def get_selected_track(self):
+        return self.selected_track_idx
 
     def get_selected_clip(self):
         """Get currently selected clip (for backward compatibility)."""
