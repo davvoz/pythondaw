@@ -33,6 +33,7 @@ class TimelineCanvas:
         self.drag_data = None  # {"clip": clip, "track": idx, "start_x": x, "start_time": t}
         self.resize_data = None  # {"clip": clip, "track": idx, "edge": "left"|"right", ...}
         self.clip_canvas_ids = {}  # {canvas_id: (track_idx, clip_obj)}
+        self.resize_handle_size = 12  # Larghezza zona resize ai bordi (più grande = più facile)
         
         # Clipboard for copy/paste
         self.clipboard = []  # [(track_index, clip_data), ...]
@@ -772,6 +773,10 @@ class TimelineCanvas:
             x0 + 6, y0 + 14, anchor="nw", text=clip_name,
             fill="#ffffff", font=("Segoe UI", 9, "bold")
         )
+        
+        # Draw resize handles se la clip è selezionata
+        if is_selected:
+            self._draw_resize_handles(x0, x1, y0, y1)
 
     def _draw_waveform(self, clip, x0, x1, y0, y1):
         """Draw waveform visualization in clip."""
@@ -795,6 +800,42 @@ class TimelineCanvas:
                     )
         except Exception:
             pass
+    
+    def _draw_resize_handles(self, x0, x1, y0, y1):
+        """Disegna i handle di ridimensionamento ai bordi della clip selezionata."""
+        handle_color = "#ffffff"
+        handle_width = 3
+        
+        # Handle sinistro (linea verticale)
+        self.canvas.create_line(
+            x0, y0 + 8, x0, y1 - 8,
+            fill=handle_color, width=handle_width, tags="resize_handle"
+        )
+        
+        # Handle destro (linea verticale)
+        self.canvas.create_line(
+            x1, y0 + 8, x1, y1 - 8,
+            fill=handle_color, width=handle_width, tags="resize_handle"
+        )
+        
+        # Indicatore visivo centrale sui bordi (per maggiore chiarezza)
+        handle_mid_y = (y0 + y1) / 2
+        
+        # Frecce sinistra
+        self.canvas.create_polygon(
+            x0 + 1, handle_mid_y,
+            x0 + 8, handle_mid_y - 4,
+            x0 + 8, handle_mid_y + 4,
+            fill=handle_color, outline="", tags="resize_handle"
+        )
+        
+        # Frecce destra
+        self.canvas.create_polygon(
+            x1 - 1, handle_mid_y,
+            x1 - 8, handle_mid_y - 4,
+            x1 - 8, handle_mid_y + 4,
+            fill=handle_color, outline="", tags="resize_handle"
+        )
 
     def _draw_loop_markers(self, height):
         """Draw loop region markers if loop is enabled."""
@@ -1093,19 +1134,23 @@ class TimelineCanvas:
             clip_x0 = clip.start_time * self.px_per_sec  # No left_margin offset
             clip_x1 = clip.end_time * self.px_per_sec
             
-            # Check for edge resize (only if single clip selected)
-            if not ctrl_pressed and abs(x - clip_x0) < 8:
+            # Check for edge resize con zona più ampia e priorità maggiore
+            resize_edge = self._get_resize_edge(x, clip_x0, clip_x1)
+            
+            if resize_edge and not ctrl_pressed:
+                # Modalità resize - ha priorità sul drag
                 self.resize_data = {
                     "clip": clip, "track": track_idx,
-                    "edge": "left", "orig_start": clip.start_time
+                    "edge": resize_edge,
+                    "orig_start": clip.start_time,
+                    "orig_end": clip.end_time,
+                    "start_x": x
                 }
-                self.select_clip(track_idx, clip)
-            elif not ctrl_pressed and abs(x - clip_x1) < 8:
-                self.resize_data = {
-                    "clip": clip, "track": track_idx,
-                    "edge": "right", "orig_end": clip.end_time
-                }
-                self.select_clip(track_idx, clip)
+                # Assicurati che la clip sia selezionata
+                if not any(c == clip for _, c in self.selected_clips):
+                    self.select_clip(track_idx, clip)
+                # Imposta cursore
+                self.canvas.config(cursor="sb_h_double_arrow")
             else:
                 # Multi-selection or single selection
                 if ctrl_pressed:
@@ -1349,6 +1394,14 @@ class TimelineCanvas:
                 self.canvas.config(cursor="")
             return
         
+        # Release resize
+        if self.resize_data is not None:
+            clip = self.resize_data["clip"]
+            print(f"✓ Resize complete: {clip.name} | Start: {clip.start_time:.3f}s | Duration: {clip.duration:.3f}s")
+            self.resize_data = None
+            self.canvas.config(cursor="")
+            return
+        
         # Release volume/pan dragging
         if self.dragging_volume is not None:
             track_idx = self.dragging_volume['track']
@@ -1445,10 +1498,13 @@ class TimelineCanvas:
         
         if clicked_clip:
             track_idx, clip = clicked_clip
-            clip_x0 = self.left_margin + clip.start_time * self.px_per_sec
-            clip_x1 = self.left_margin + clip.end_time * self.px_per_sec
+            clip_x0 = clip.start_time * self.px_per_sec  # No left_margin offset
+            clip_x1 = clip.end_time * self.px_per_sec
             
-            if abs(x - clip_x0) < 8 or abs(x - clip_x1) < 8:
+            # Usa la stessa logica di resize del click
+            resize_edge = self._get_resize_edge(x, clip_x0, clip_x1)
+            
+            if resize_edge:
                 self.canvas.config(cursor="sb_h_double_arrow")
             else:
                 self.canvas.config(cursor="hand2")
@@ -1474,18 +1530,35 @@ class TimelineCanvas:
         return None
 
     def _handle_resize(self, x):
-        """Handle clip resize."""
+        """Handle clip resize con feedback visivo migliorato."""
         clip = self.resize_data["clip"]
         new_time = x / self.px_per_sec  # No left_margin offset
         new_time = max(0, new_time)
         new_time = self.snap_time(new_time)
         
         if self.resize_data["edge"] == "left":
+            # Ridimensiona dal bordo sinistro
+            # La clip non può diventare più corta di 0.1 secondi
             if new_time < clip.end_time - 0.1:
+                # Aggiorna start_time mantenendo end_time fisso
+                old_start = clip.start_time
                 clip.start_time = new_time
+                # La durata si aggiusta automaticamente tramite la property
+                
+                # Feedback visivo: mostra il delta tempo
+                delta = new_time - old_start
+                print(f"⬅ Resize left: {delta:+.3f}s | Duration: {clip.duration:.3f}s")
         else:
+            # Ridimensiona dal bordo destro
+            # La clip non può diventare più corta di 0.1 secondi
             if new_time > clip.start_time + 0.1:
+                # Aggiorna la durata
+                old_duration = clip.duration
                 clip.duration = new_time - clip.start_time
+                
+                # Feedback visivo: mostra il delta tempo
+                delta = clip.duration - old_duration
+                print(f"➡ Resize right: {delta:+.3f}s | Duration: {clip.duration:.3f}s")
         
         self.redraw()
 
@@ -1729,6 +1802,27 @@ class TimelineCanvas:
         
         return pasted_clips
 
+    def _get_resize_edge(self, mouse_x, clip_x0, clip_x1):
+        """Determina se il mouse è su un bordo ridimensionabile della clip.
+        
+        Args:
+            mouse_x: Posizione X del mouse
+            clip_x0: Posizione X inizio clip
+            clip_x1: Posizione X fine clip
+            
+        Returns:
+            "left" se sul bordo sinistro, "right" se sul bordo destro, None altrimenti
+        """
+        # Controlla bordo sinistro (priorità maggiore)
+        if abs(mouse_x - clip_x0) <= self.resize_handle_size:
+            return "left"
+        
+        # Controlla bordo destro
+        if abs(mouse_x - clip_x1) <= self.resize_handle_size:
+            return "right"
+        
+        return None
+    
     @staticmethod
     def _lighten_color(hex_color, factor=1.3):
         """Lighten a hex color by a factor."""
