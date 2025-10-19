@@ -1627,12 +1627,14 @@ class TimelineCanvas:
                 
                 if self.timeline is not None:
                     for track_idx, clip in self.timeline.all_placements():
-                        clip_x1 = self.left_margin + clip.start_time * self.px_per_sec
-                        clip_x2 = self.left_margin + clip.end_time * self.px_per_sec
+                        # Calcola le coordinate delle clip SENZA left_margin (i canvas sono separati)
+                        clip_x1 = clip.start_time * self.px_per_sec
+                        clip_x2 = clip.end_time * self.px_per_sec
                         clip_y1 = self.ruler_height + track_idx * self.track_height
                         clip_y2 = clip_y1 + self.track_height
                         
                         # Check if clip intersects with selection box
+                        # Verifica che ci sia sovrapposizione sia in X che in Y
                         if (clip_x2 >= x1 and clip_x1 <= x2 and 
                             clip_y2 >= y1 and clip_y1 <= y2):
                             selected.append((track_idx, clip))
