@@ -1,4 +1,4 @@
-"""Simple Clip Inspector dialog for editing AudioClip parameters."""
+"""Professional Clip Inspector dialog with waveform editor."""
 
 try:
     import tkinter as tk
@@ -9,6 +9,7 @@ except Exception:  # pragma: no cover
 
 from typing import Callable, Optional
 from src.audio.clip import AudioClip
+from src.ui.waveform_editor import WaveformEditor
 
 FADE_SHAPES = ["linear", "exp", "log", "s-curve"]
 
@@ -26,11 +27,66 @@ def show_clip_inspector(parent, clip: AudioClip, on_apply: Optional[Callable[[Au
 
     win = tk.Toplevel(parent)
     win.title(f"Clip Inspector - {getattr(clip, 'name', 'clip')}")
-    win.resizable(False, False)
+    win.resizable(True, True)
     win.configure(bg="#1e1e1e")
+    win.geometry("800x700")  # Larger window for waveform display
+    
+    # Configure window grid
+    win.columnconfigure(0, weight=1)
+    win.rowconfigure(0, weight=0)  # Waveform section
+    win.rowconfigure(1, weight=1)  # Controls section
 
-    frm = ttk.Frame(win, padding=16)
-    frm.grid(sticky="nsew")
+    # --- WAVEFORM SECTION ---
+    waveform_frame = ttk.Frame(win, padding=8)
+    waveform_frame.grid(row=0, column=0, sticky="nsew", padx=8, pady=(8, 0))
+    waveform_frame.columnconfigure(0, weight=1)
+    waveform_frame.rowconfigure(1, weight=1)
+    
+    # Waveform title
+    title_label = ttk.Label(
+        waveform_frame,
+        text=f"🎵 {getattr(clip, 'name', 'Clip')}",
+        font=("Segoe UI", 12, "bold"),
+        foreground="#3b82f6"
+    )
+    title_label.grid(row=0, column=0, sticky="w", pady=(0, 8))
+    
+    # Waveform editor
+    waveform_editor = WaveformEditor(
+        waveform_frame,
+        clip,
+        on_change=None,  # Will be set later
+        height=250
+    )
+    waveform_editor.grid(row=1, column=0, sticky="nsew", pady=(0, 8))
+    
+    # Waveform controls
+    waveform_controls = ttk.Frame(waveform_frame)
+    waveform_controls.grid(row=2, column=0, sticky="ew")
+    
+    ttk.Label(
+        waveform_controls,
+        text="💡 Tip: Drag the handles (S=Start, E=End, FI=Fade In, FO=Fade Out) to edit the clip",
+        font=("Segoe UI", 8),
+        foreground="#6b7280"
+    ).pack(side="left", padx=4)
+
+    # --- CONTROLS SECTION ---
+    # Scrollable frame for controls
+    canvas = tk.Canvas(win, bg="#1e1e1e", highlightthickness=0)
+    scrollbar = ttk.Scrollbar(win, orient="vertical", command=canvas.yview)
+    frm = ttk.Frame(canvas, padding=16)
+    
+    frm.bind(
+        "<Configure>",
+        lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+    )
+    
+    canvas.create_window((0, 0), window=frm, anchor="nw")
+    canvas.configure(yscrollcommand=scrollbar.set)
+    
+    canvas.grid(row=1, column=0, sticky="nsew", padx=(8, 0), pady=8)
+    scrollbar.grid(row=1, column=1, sticky="ns", pady=8, padx=(0, 8))
     
     # Configure grid weights for better layout
     frm.columnconfigure(1, weight=1)
@@ -56,11 +112,31 @@ def show_clip_inspector(parent, clip: AudioClip, on_apply: Optional[Callable[[Au
             fade_out_label.config(text=f"{fade_out_var.get():.3f} s")
             pitch_label.config(text=f"{pitch_var.get():.1f} st")
             
+            # Update waveform display
+            if waveform_editor:
+                waveform_editor.redraw()
+            
             # Trigger callback for live preview
             if callable(on_apply):
                 on_apply(clip)
         except Exception as ex:
             print(f"Clip Inspector: error updating: {ex}")
+    
+    def on_waveform_change():
+        """Called when waveform editor changes clip (via dragging handles)."""
+        try:
+            # Sync variables with clip values
+            volume_var.set(clip.volume)
+            start_var.set(clip.start_offset)
+            end_var.set(clip.end_offset)
+            fade_in_var.set(clip.fade_in)
+            fade_out_var.set(clip.fade_out)
+            # Note: on_change will be triggered by variable changes
+        except Exception as ex:
+            print(f"Clip Inspector: error syncing from waveform: {ex}")
+    
+    # Set waveform editor callback
+    waveform_editor.on_change = on_waveform_change
     
     # Variables with trace for real-time updates
     volume_var = tk.DoubleVar(value=getattr(clip, 'volume', 1.0))
@@ -212,14 +288,109 @@ def show_clip_inspector(parent, clip: AudioClip, on_apply: Optional[Callable[[Au
     fade_out_slider.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0, 12))
     row += 1
     
-    # CLOSE BUTTON
+    # ACTIONS SECTION
     ttk.Separator(frm, orient="horizontal").grid(
         row=row, column=0, columnspan=2, sticky="ew", pady=(4, 12)
     )
     row += 1
     
-    close_btn = ttk.Button(frm, text="Close", command=win.destroy)
-    close_btn.grid(row=row, column=0, columnspan=2, pady=(4, 0))
+    # Info display
+    info_frame = ttk.Frame(frm)
+    info_frame.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0, 12))
+    info_frame.columnconfigure(0, weight=1)
+    row += 1
+    
+    def update_info():
+        """Update clip information display."""
+        try:
+            duration = clip.length_seconds
+            total_duration = len(clip.buffer) / float(clip.sample_rate) if clip.sample_rate > 0 else 0
+            info_text = (
+                f"📊 Duration: {duration:.2f}s | "
+                f"Original: {total_duration:.2f}s | "
+                f"Sample Rate: {clip.sample_rate}Hz | "
+                f"Samples: {len(clip.buffer):,}"
+            )
+            info_label.config(text=info_text)
+        except Exception:
+            pass
+    
+    info_label = ttk.Label(
+        info_frame,
+        text="",
+        font=("Segoe UI", 8),
+        foreground="#9ca3af"
+    )
+    info_label.pack(fill="x")
+    update_info()
+    
+    # Update info on changes
+    original_on_change = on_change
+    def on_change_with_info(*args):
+        original_on_change(*args)
+        update_info()
+    on_change = on_change_with_info
+    
+    # Update traces to use new on_change
+    for var in [volume_var, start_var, end_var, fade_in_var, fade_in_shape_var, 
+                fade_out_var, fade_out_shape_var, pitch_var]:
+        var.trace_remove('write', var.trace_info()[0][1] if var.trace_info() else None)
+        var.trace_add('write', on_change)
+    
+    # Button frame
+    button_frame = ttk.Frame(frm)
+    button_frame.grid(row=row, column=0, columnspan=2, pady=(4, 0))
+    row += 1
+    
+    # Reset button
+    def reset_clip():
+        """Reset clip to default values."""
+        clip.start_offset = 0.0
+        clip.end_offset = 0.0
+        clip.fade_in = 0.0
+        clip.fade_out = 0.0
+        clip.pitch_semitones = 0.0
+        clip.volume = 1.0
+        
+        volume_var.set(1.0)
+        start_var.set(0.0)
+        end_var.set(0.0)
+        fade_in_var.set(0.0)
+        fade_out_var.set(0.0)
+        pitch_var.set(0.0)
+        
+        waveform_editor.redraw()
+        if callable(on_apply):
+            on_apply(clip)
+    
+    reset_btn = ttk.Button(button_frame, text="🔄 Reset", command=reset_clip)
+    reset_btn.pack(side="left", padx=4)
+    
+    # Apply button
+    def apply_changes():
+        """Apply changes and close."""
+        if callable(on_apply):
+            on_apply(clip)
+        win.destroy()
+    
+    apply_btn = ttk.Button(button_frame, text="✓ Apply & Close", command=apply_changes)
+    apply_btn.pack(side="left", padx=4)
+    
+    # Close button
+    close_btn = ttk.Button(button_frame, text="✕ Close", command=win.destroy)
+    close_btn.pack(side="left", padx=4)
+
+    # Enable mousewheel scrolling
+    def _on_mousewheel(event):
+        canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+    
+    canvas.bind_all("<MouseWheel>", _on_mousewheel)
+    
+    def _on_closing():
+        canvas.unbind_all("<MouseWheel>")
+        win.destroy()
+    
+    win.protocol("WM_DELETE_WINDOW", _on_closing)
 
     win.transient(parent)
     win.grab_set()

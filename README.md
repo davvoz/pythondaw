@@ -173,7 +173,18 @@ This project is licensed under the MIT License. See the LICENSE file for more de
 
 ## Recent Updates
 
-### 💾 Project Save/Load System (Latest)
+### 🎨 Professional Clip Inspector (Latest)
+- **Interactive waveform display** with real-time visualization
+- **Visual editing with draggable handles** for trim and fade controls
+- **User-friendly interface** for professional audio editing
+- **Zoom and pan** support for detailed waveform inspection
+- **Real-time preview** of all modifications
+- **Professional color-coded UI** with clear visual feedback
+- **Multiple fade shapes** (Linear, Exponential, Logarithmic, S-Curve)
+
+See [CLIP_INSPECTOR_GUIDE.md](python-daw/CLIP_INSPECTOR_GUIDE.md) for complete documentation.
+
+### 💾 Project Save/Load System
 - **Save complete projects** including all audio samples
 - **Two modes**: Separate files (recommended) or embedded audio
 - **Full property preservation**: All clip properties, fades, effects, etc.
