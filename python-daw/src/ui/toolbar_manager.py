@@ -37,6 +37,8 @@ class ToolbarManager:
         
         self._build_transport_controls()
         self._add_separator()
+        self._build_track_controls()
+        self._add_separator()
         self._build_zoom_controls()
         self._add_separator()
         self._build_loop_controls()
@@ -55,6 +57,14 @@ class ToolbarManager:
         ttk.Button(
             self.toolbar, text="■ Stop",
             command=self.callbacks.get('stop', lambda: None),
+            style="Tool.TButton", width=10
+        ).pack(side="left", padx=4, pady=8)
+    
+    def _build_track_controls(self):
+        """Build track management controls."""
+        ttk.Button(
+            self.toolbar, text="+ Track",
+            command=self.callbacks.get('add_track', lambda: None),
             style="Tool.TButton", width=10
         ).pack(side="left", padx=4, pady=8)
 

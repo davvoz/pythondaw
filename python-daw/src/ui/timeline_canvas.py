@@ -16,14 +16,15 @@ class TimelineCanvas:
         self.player = player
         
         # Canvas state
-        self.canvas = None
+        self.canvas = None  # Main timeline canvas (scrollable)
+        self.controls_canvas = None  # Fixed controls canvas (left side)
         self.scroll = None
         self.cursor_id = None
         
         # Display settings
         self.px_per_sec = 200  # pixels per second
-        self.track_height = 60
-        self.left_margin = 60
+        self.track_height = 80  # Increased for inline controls
+        self.left_margin = 280  # Width of controls area
         self.ruler_height = 32
         
         # Clip interaction state
@@ -54,18 +55,70 @@ class TimelineCanvas:
         self.box_selection_start = None  # (x, y) start point of box selection
         self.box_selection_rect = None  # Canvas rectangle ID for visual feedback
         
+        # Track controls interaction state
+        self.dragging_volume = None  # {"track": idx, "start_x": x, "start_vol": vol}
+        self.dragging_pan = None  # {"track": idx, "start_x": x, "start_pan": pan}
+        
+        # Context menus (will be set by MainWindow)
+        self.track_menu = None
+        
         self._build_canvas(parent)
 
     def _build_canvas(self, parent):
-        """Build the timeline canvas with scrollbars."""
+        """Build the timeline canvas with fixed controls on left and scrollable timeline on right."""
         if parent is None or tk is None:
             return
             
-        frame = tk.Frame(parent, bg="#0d0d0d")
-        frame.pack(fill="both", expand=True)
+        # Main container
+        container = tk.Frame(parent, bg="#0d0d0d")
+        container.pack(fill="both", expand=True)
+        
+        # TOP ROW: Header row with controls ruler (left) and timeline ruler (right)
+        header_frame = tk.Frame(container, bg="#0d0d0d", height=self.ruler_height)
+        header_frame.pack(side="top", fill="x")
+        header_frame.pack_propagate(False)
+        
+        # Left part of header (above controls)
+        self.controls_ruler_canvas = tk.Canvas(
+            header_frame,
+            bg="#1a1a1a",
+            highlightthickness=0,
+            borderwidth=0,
+            width=self.left_margin,
+            height=self.ruler_height
+        )
+        self.controls_ruler_canvas.pack(side="left", fill="y")
+        
+        # Right part of header (timeline ruler - scrolls horizontally but NOT vertically)
+        self.ruler_canvas = tk.Canvas(
+            header_frame,
+            bg="#1a1a1a",
+            highlightthickness=0,
+            borderwidth=0,
+            height=self.ruler_height
+        )
+        self.ruler_canvas.pack(side="left", fill="both", expand=True)
+        
+        # BOTTOM ROW: Scrollable content
+        content_frame = tk.Frame(container, bg="#0d0d0d")
+        content_frame.pack(side="top", fill="both", expand=True)
+        
+        # LEFT: Fixed controls canvas (no horizontal scroll)
+        self.controls_canvas = tk.Canvas(
+            content_frame,
+            bg="#1a1a1a",
+            highlightthickness=0,
+            borderwidth=0,
+            width=self.left_margin
+        )
+        self.controls_canvas.pack(side="left", fill="y")
+        
+        # RIGHT: Scrollable timeline canvas
+        timeline_frame = tk.Frame(content_frame, bg="#0d0d0d")
+        timeline_frame.pack(side="left", fill="both", expand=True)
         
         self.canvas = tk.Canvas(
-            frame,
+            timeline_frame,
             bg="#0d0d0d",
             highlightthickness=0,
             borderwidth=0
@@ -74,25 +127,28 @@ class TimelineCanvas:
         # Scrollbars
         try:
             from tkinter import ttk
-            hscroll = ttk.Scrollbar(frame, orient="horizontal", command=self.canvas.xview)
-            vscroll = ttk.Scrollbar(frame, orient="vertical", command=self.canvas.yview)
+            hscroll = ttk.Scrollbar(timeline_frame, orient="horizontal", command=self._on_xscroll)
+            vscroll = ttk.Scrollbar(content_frame, orient="vertical", command=self._on_vscroll)
         except Exception:
-            hscroll = tk.Scrollbar(frame, orient="horizontal", command=self.canvas.xview)
-            vscroll = tk.Scrollbar(frame, orient="vertical", command=self.canvas.yview)
+            hscroll = tk.Scrollbar(timeline_frame, orient="horizontal", command=self._on_xscroll)
+            vscroll = tk.Scrollbar(content_frame, orient="vertical", command=self._on_vscroll)
         
-        # Use wrappers so we can update visibility while syncing positions
-        self.canvas.configure(xscrollcommand=self._on_xscroll_change, yscrollcommand=self._on_yscroll_change)
+        # Configure canvas scrolling
+        self.canvas.configure(
+            xscrollcommand=self._on_xscroll_change,
+            yscrollcommand=self._on_yscroll_change
+        )
         
+        # Layout
         self.canvas.grid(row=0, column=0, sticky="nsew")
-        # Do not show scrollbars initially; they will be shown only when needed
-        # hscroll and vscroll will be gridded dynamically
+        vscroll.pack(side="right", fill="y")
         
-        frame.grid_rowconfigure(0, weight=1)
-        frame.grid_columnconfigure(0, weight=1)
+        timeline_frame.grid_rowconfigure(0, weight=1)
+        timeline_frame.grid_columnconfigure(0, weight=1)
         
         self.scroll = hscroll
         self.hscroll = hscroll
-        self.vscroll = vscroll  # Save vertical scrollbar for synchronization
+        self.vscroll = vscroll
         self._hscroll_visible = False
         self._vscroll_visible = False
         
@@ -101,13 +157,32 @@ class TimelineCanvas:
 
         # Update scrollbar visibility on resize
         self.canvas.bind('<Configure>', lambda e: self._update_scrollbars())
+        self.controls_canvas.bind('<Configure>', lambda e: self._sync_controls_height())
+    
+    def _on_xscroll(self, *args):
+        """Handle horizontal scroll - sync timeline canvas and ruler canvas."""
+        self.canvas.xview(*args)
+        if hasattr(self, 'ruler_canvas'):
+            self.ruler_canvas.xview(*args)
+    
+    def _on_vscroll(self, *args):
+        """Handle vertical scroll - sync both canvases."""
+        self.canvas.yview(*args)
+        self.controls_canvas.yview(*args)
+    
+    def _sync_controls_height(self):
+        """Sync controls canvas scrollregion with main canvas."""
+        if self.controls_canvas and self.canvas:
+            # Match the height of the controls canvas to the main canvas
+            height = self.compute_height()
+            self.controls_canvas.config(scrollregion=(0, 0, self.left_margin, height))
 
     def _bind_mouse_events(self):
         """Bind mouse events for clip interaction."""
         if self.canvas is None:
             return
             
-        # Mouse wheel for scrolling
+        # Mouse wheel for scrolling (both canvases)
         def on_wheel(event):
             try:
                 # Determine if scrolling is needed based on content
@@ -128,16 +203,34 @@ class TimelineCanvas:
                     if not need_v:
                         return
                     delta = (event.delta or -event.num) / 120.0
+                    # Sync both canvases vertically
                     self.canvas.yview_scroll(int(-delta), 'units')
+                    if self.controls_canvas:
+                        self.controls_canvas.yview_scroll(int(-delta), 'units')
             except Exception:
                 pass
-                
+        
+        # Bind to both canvases
         self.canvas.bind('<MouseWheel>', on_wheel)
         self.canvas.bind('<Button-1>', self.on_click)
         self.canvas.bind('<B1-Motion>', self.on_drag)
         self.canvas.bind('<ButtonRelease-1>', self.on_release)
         self.canvas.bind('<Button-3>', self.on_right_click)
         self.canvas.bind('<Motion>', self.on_motion)
+        
+        if self.controls_canvas:
+            self.controls_canvas.bind('<MouseWheel>', on_wheel)
+            self.controls_canvas.bind('<Button-1>', self.on_click)
+            self.controls_canvas.bind('<B1-Motion>', self.on_drag)
+            self.controls_canvas.bind('<ButtonRelease-1>', self.on_release)
+            self.controls_canvas.bind('<Motion>', self.on_motion)
+        
+        # Bind ruler canvas for loop marker dragging
+        if hasattr(self, 'ruler_canvas') and self.ruler_canvas:
+            self.ruler_canvas.bind('<Button-1>', self.on_click)
+            self.ruler_canvas.bind('<B1-Motion>', self.on_drag)
+            self.ruler_canvas.bind('<ButtonRelease-1>', self.on_release)
+            self.ruler_canvas.bind('<Motion>', self.on_motion)
     
     def set_vscroll_callback(self, callback):
         """Set callback to be called when vertical scroll position changes.
@@ -152,7 +245,7 @@ class TimelineCanvas:
             self.canvas.configure(yscrollcommand=on_scroll)
 
     def compute_width(self):
-        """Calculate timeline width based on content."""
+        """Calculate timeline width based on content (without left margin)."""
         max_end = 5.0
         try:
             if self.timeline is not None:
@@ -162,7 +255,8 @@ class TimelineCanvas:
                             max_end = clip.end_time
         except Exception:
             pass
-        width = int(self.left_margin + max_end * self.px_per_sec + 40)
+        # Don't include left_margin since controls are in separate canvas
+        width = int(max_end * self.px_per_sec + 40)
         return max(width, 800)
 
     def compute_height(self):
@@ -175,13 +269,26 @@ class TimelineCanvas:
         """Redraw the entire timeline."""
         if self.canvas is None:
             return
-            
+        
+        # Clear all canvases
         self.canvas.delete("all")
+        if self.controls_canvas:
+            self.controls_canvas.delete("all")
+        if hasattr(self, 'ruler_canvas'):
+            self.ruler_canvas.delete("all")
+        if hasattr(self, 'controls_ruler_canvas'):
+            self.controls_ruler_canvas.delete("all")
         
         width = self.compute_width()
         height = self.compute_height()
         
+        # Set scroll regions
         self.canvas.config(scrollregion=(0, 0, width, height))
+        if self.controls_canvas:
+            self.controls_canvas.config(scrollregion=(0, 0, self.left_margin, height))
+        # Ruler canvas scrolls horizontally like main canvas but has fixed height
+        if hasattr(self, 'ruler_canvas'):
+            self.ruler_canvas.config(scrollregion=(0, 0, width, self.ruler_height))
         
         # If content fits, reset view to top/left to avoid stray offsets
         try:
@@ -189,15 +296,20 @@ class TimelineCanvas:
             ch = max(1, self.canvas.winfo_height())
             if width <= cw:
                 self.canvas.xview_moveto(0)
+                if hasattr(self, 'ruler_canvas'):
+                    self.ruler_canvas.xview_moveto(0)
             if height <= ch:
                 self.canvas.yview_moveto(0)
+                if self.controls_canvas:
+                    self.controls_canvas.yview_moveto(0)
         except Exception:
             pass
         
-        # Draw in correct order: backgrounds first, then lines/content on top
-        self._draw_ruler(width)
-        self._draw_track_lanes(width)  # Track backgrounds (opaque)
-        self._draw_grid(width, height)  # Grid lines OVER the tracks
+        # Draw in correct order
+        self._draw_ruler(width)  # Draw ruler on fixed ruler_canvas (scrolls horizontally only)
+        self._draw_track_controls()  # Draw controls on left canvas
+        self._draw_track_backgrounds(width)  # Draw track backgrounds on main canvas
+        self._draw_grid(width, height)
         self._draw_clips()
         self._draw_loop_markers(height)
         self._draw_cursor(height)
@@ -209,13 +321,18 @@ class TimelineCanvas:
             pass
 
     def _on_xscroll_change(self, first, last):
-        """Sync horizontal scrollbar and possibly update visibility."""
+        """Sync horizontal scrollbar and ruler canvas."""
         if hasattr(self, 'hscroll') and self.hscroll:
             try:
                 self.hscroll.set(first, last)
             except Exception:
                 pass
-        # No heavy work here; visibility handled by _update_scrollbars
+        # Sync ruler canvas horizontal scroll with main canvas
+        if hasattr(self, 'ruler_canvas'):
+            try:
+                self.ruler_canvas.xview_moveto(first)
+            except Exception:
+                pass
         
     def _on_yscroll_change(self, first, last):
         """Sync vertical scrollbar and possibly update visibility."""
@@ -273,17 +390,83 @@ class TimelineCanvas:
                 self.canvas.yview_moveto(0)
             except Exception:
                 pass
-
+    
     def _draw_ruler(self, width):
-        """Draw the time ruler at the top."""
-        if self.canvas is None:
+        """Draw the time ruler at the top with time markers on the fixed ruler canvas."""
+        # Use ruler_canvas if available, otherwise fall back to main canvas
+        target_canvas = self.ruler_canvas if hasattr(self, 'ruler_canvas') else self.canvas
+        if target_canvas is None:
             return
             
         # Ruler background
-        self.canvas.create_rectangle(
+        target_canvas.create_rectangle(
             0, 0, width, self.ruler_height,
             fill="#1a1a1a", outline=""
         )
+        
+        # Draw time markers and divisions
+        if self.project is not None:
+            # Musical ruler - bars and beats
+            bar_duration = self.project.get_bar_duration()
+            beat_duration = self.project.get_beat_duration()
+            max_time = width / self.px_per_sec
+            
+            # Draw bar markers
+            bar_num = 0
+            while True:
+                bar_time = bar_num * bar_duration
+                if bar_time > max_time:
+                    break
+                
+                x = bar_time * self.px_per_sec
+                
+                # Bar line in ruler
+                target_canvas.create_line(x, 0, x, self.ruler_height, fill="#3b82f6", width=2)
+                
+                # Bar number
+                target_canvas.create_text(
+                    x + 4, 8, anchor="nw", text=f"{bar_num + 1}",
+                    fill="#60a5fa", font=("Consolas", 9, "bold")
+                )
+                bar_num += 1
+            
+            # Draw beat markers
+            beat_num = 0
+            while True:
+                beat_time = beat_num * beat_duration
+                if beat_time > max_time:
+                    break
+                
+                x = beat_time * self.px_per_sec
+                is_bar = abs(beat_time % bar_duration) < 0.001
+                
+                if not is_bar:  # Don't overdraw bar lines
+                    # Beat line in ruler
+                    target_canvas.create_line(x, self.ruler_height - 8, x, self.ruler_height, 
+                                          fill="#1e40af", width=1)
+                
+                beat_num += 1
+        else:
+            # Simple time ruler - seconds
+            total_secs = int(width / self.px_per_sec) + 1
+            
+            for sec in range(0, total_secs):
+                x = sec * self.px_per_sec
+                
+                # Second marker
+                target_canvas.create_line(x, 0, x, self.ruler_height, fill="#3b82f6", width=2)
+                
+                # Time label
+                target_canvas.create_text(
+                    x + 4, 8, anchor="nw", text=f"{sec:02d}s",
+                    fill="#60a5fa", font=("Consolas", 8, "bold")
+                )
+                
+                # Quarter second markers
+                for q in range(1, 4):
+                    mx = x + q * (self.px_per_sec / 4.0)
+                    target_canvas.create_line(mx, self.ruler_height - 6, mx, self.ruler_height, 
+                                          fill="#60a5fa", width=1)
 
     def _draw_grid(self, width, height):
         """Draw the musical grid or time grid."""
@@ -309,14 +492,11 @@ class TimelineCanvas:
             if bar_time > max_time:
                 break
             
-            x = self.left_margin + bar_time * self.px_per_sec
+            x = bar_time * self.px_per_sec  # No left_margin offset
             
             # Bar line - thick bright blue (#3b82f6)
             self.canvas.create_line(x, self.ruler_height, x, height, fill="#3b82f6", width=3)
-            self.canvas.create_text(
-                x + 4, 8, anchor="nw", text=f"{bar_num + 1}",
-                fill="#60a5fa", font=("Consolas", 9, "bold")
-            )
+            
             bar_num += 1
         
         # PASS 2: Draw ALL grid subdivision lines based on selected grid_division
@@ -326,7 +506,7 @@ class TimelineCanvas:
             t = grid_time  # Start from first grid point
             
             while t < max_time:
-                x = self.left_margin + t * self.px_per_sec
+                x = t * self.px_per_sec  # No left_margin offset
                 
                 # Check what type of line this is
                 is_bar = abs(t % bar_duration) < 0.001
@@ -350,24 +530,176 @@ class TimelineCanvas:
         total_secs = int(width / self.px_per_sec) + 1
         
         for sec in range(0, total_secs):
-            x = self.left_margin + sec * self.px_per_sec
+            x = sec * self.px_per_sec  # No left_margin offset
             
             # Major gridline - bright blue like musical grid
             self.canvas.create_line(x, self.ruler_height, x, height, fill="#3b82f6", width=2)
-            
-            # Time label
-            self.canvas.create_text(
-                x + 4, 8, anchor="nw", text=f"{sec:02d}s",
-                fill="#60a5fa", font=("Consolas", 8, "bold")
-            )
             
             # Minor ticks (quarters) - light blue dashed
             for q in range(1, 4):
                 mx = x + q * (self.px_per_sec / 4.0)
                 self.canvas.create_line(mx, self.ruler_height, mx, height, fill="#60a5fa", width=1, dash=(3, 3))
 
-    def _draw_track_lanes(self, width):
-        """Draw track lanes with labels."""
+    def _draw_track_controls(self):
+        """Draw track controls on the fixed left canvas."""
+        if self.controls_canvas is None or self.mixer is None:
+            return
+            
+        tracks_count = len(self.mixer.tracks)
+        
+        for i in range(tracks_count):
+            y0 = self.ruler_height + i * self.track_height
+            y1 = y0 + self.track_height
+            
+            # Controls area background
+            self.controls_canvas.create_rectangle(
+                0, y0, self.left_margin, y1, 
+                fill="#1a1a1a", outline="#2d2d2d", width=1
+            )
+            
+            # Track info
+            track = self.mixer.tracks[i]
+            label = track.get("name", f"Track {i+1}")
+            track_color = track.get("color", "#3b82f6")
+            volume = track.get("volume", 1.0)
+            pan = track.get("pan", 0.0)
+            is_muted = track.get("mute", False)
+            is_soloed = track.get("solo", False)
+            
+            # Color indicator strip
+            self.controls_canvas.create_rectangle(
+                2, y0 + 4, 6, y1 - 4, 
+                fill=track_color, outline=""
+            )
+            
+            # Track number and name
+            self.controls_canvas.create_text(
+                12, y0 + 12, anchor="nw",
+                text=f"{i+1}.", fill="#888888",
+                font=("Segoe UI", 8)
+            )
+            self.controls_canvas.create_text(
+                28, y0 + 12, anchor="nw",
+                text=label, fill=track_color,
+                font=("Segoe UI", 9, "bold")
+            )
+            
+            # M/S/FX Buttons (small, top-right of control area)
+            btn_y = y0 + 8
+            btn_x = self.left_margin - 95
+            
+            # Mute button
+            mute_color = "#dc2626" if is_muted else "#404040"
+            self.controls_canvas.create_rectangle(
+                btn_x, btn_y, btn_x + 20, btn_y + 18,
+                fill=mute_color, outline="#555555", width=1,
+                tags=f"mute_{i}"
+            )
+            self.controls_canvas.create_text(
+                btn_x + 10, btn_y + 9,
+                text="M", fill="#ffffff",
+                font=("Segoe UI", 8, "bold"),
+                tags=f"mute_{i}"
+            )
+            
+            # Solo button
+            solo_color = "#eab308" if is_soloed else "#404040"
+            self.controls_canvas.create_rectangle(
+                btn_x + 25, btn_y, btn_x + 45, btn_y + 18,
+                fill=solo_color, outline="#555555", width=1,
+                tags=f"solo_{i}"
+            )
+            self.controls_canvas.create_text(
+                btn_x + 35, btn_y + 9,
+                text="S", fill="#ffffff",
+                font=("Segoe UI", 8, "bold"),
+                tags=f"solo_{i}"
+            )
+            
+            # FX button
+            self.controls_canvas.create_rectangle(
+                btn_x + 50, btn_y, btn_x + 72, btn_y + 18,
+                fill="#8b5cf6", outline="#555555", width=1,
+                tags=f"fx_{i}"
+            )
+            self.controls_canvas.create_text(
+                btn_x + 61, btn_y + 9,
+                text="FX", fill="#ffffff",
+                font=("Segoe UI", 7, "bold"),
+                tags=f"fx_{i}"
+            )
+            
+            # Volume control (slider representation)
+            vol_y = y0 + 35
+            vol_x = 40
+            vol_width = self.left_margin - 100
+            
+            self.controls_canvas.create_text(
+                12, vol_y, anchor="w",
+                text="Vol", fill="#888888",
+                font=("Segoe UI", 7)
+            )
+            
+            # Volume track
+            self.controls_canvas.create_rectangle(
+                vol_x, vol_y - 2, vol_x + vol_width, vol_y + 2,
+                fill="#404040", outline=""
+            )
+            
+            # Volume fill
+            vol_fill = int(vol_width * volume)
+            self.controls_canvas.create_rectangle(
+                vol_x, vol_y - 2, vol_x + vol_fill, vol_y + 2,
+                fill="#3b82f6", outline=""
+            )
+            
+            # Volume value
+            self.controls_canvas.create_text(
+                vol_x + vol_width + 5, vol_y, anchor="w",
+                text=f"{volume:.2f}", fill="#f5f5f5",
+                font=("Segoe UI", 7)
+            )
+            
+            # Pan control
+            pan_y = y0 + 55
+            
+            self.controls_canvas.create_text(
+                12, pan_y, anchor="w",
+                text="Pan", fill="#888888",
+                font=("Segoe UI", 7)
+            )
+            
+            # Pan track
+            self.controls_canvas.create_rectangle(
+                vol_x, pan_y - 2, vol_x + vol_width, pan_y + 2,
+                fill="#404040", outline=""
+            )
+            
+            # Pan center marker
+            center_x = vol_x + vol_width // 2
+            self.controls_canvas.create_line(
+                center_x, pan_y - 4, center_x, pan_y + 4,
+                fill="#666666", width=1
+            )
+            
+            # Pan indicator
+            pan_pos = int(vol_width / 2 + (pan * vol_width / 2))
+            self.controls_canvas.create_oval(
+                vol_x + pan_pos - 4, pan_y - 4,
+                vol_x + pan_pos + 4, pan_y + 4,
+                fill="#10b981", outline="#065f46", width=1
+            )
+            
+            # Pan value
+            pan_text = "C" if abs(pan) < 0.05 else (f"L{abs(pan):.1f}" if pan < 0 else f"R{pan:.1f}")
+            self.controls_canvas.create_text(
+                vol_x + vol_width + 5, pan_y, anchor="w",
+                text=pan_text, fill="#f5f5f5",
+                font=("Segoe UI", 7)
+            )
+    
+    def _draw_track_backgrounds(self, width):
+        """Draw track backgrounds on the main timeline canvas."""
         if self.canvas is None or self.mixer is None:
             return
             
@@ -377,23 +709,11 @@ class TimelineCanvas:
             y0 = self.ruler_height + i * self.track_height
             y1 = y0 + self.track_height
             
-            # Alternating background
+            # Alternating background for timeline area
             bg_color = "#0d0d0d" if i % 2 == 0 else "#111111"
             self.canvas.create_rectangle(
-                self.left_margin, y0, width, y1,
+                0, y0, width, y1,
                 fill=bg_color, outline=""
-            )
-            
-            # Track label
-            label = self.mixer.tracks[i].get("name", f"Track {i+1}")
-            track_color = self.mixer.tracks[i].get("color", "#3b82f6")
-            
-            self.canvas.create_rectangle(0, y0, self.left_margin, y1, fill="#1a1a1a", outline="")
-            self.canvas.create_rectangle(2, y0 + 4, 6, y1 - 4, fill=track_color, outline="")
-            self.canvas.create_text(
-                10, y0 + self.track_height // 2, anchor="w",
-                text=f"{i+1}. {label}", fill=track_color,
-                font=("Segoe UI", 9, "bold")
             )
 
     def _draw_clips(self):
@@ -413,8 +733,8 @@ class TimelineCanvas:
         """Draw a single clip."""
         y0 = self.ruler_height + track_idx * self.track_height
         y1 = y0 + self.track_height
-        x0 = self.left_margin + int(clip.start_time * self.px_per_sec)
-        x1 = self.left_margin + int(clip.end_time * self.px_per_sec)
+        x0 = int(clip.start_time * self.px_per_sec)  # No left_margin offset
+        x1 = int(clip.end_time * self.px_per_sec)
         
         # Get track color
         clip_color = "#3b82f6"
@@ -486,57 +806,63 @@ class TimelineCanvas:
             if not loop_enabled:
                 return
                 
-            loop_x_start = self.left_margin + loop_start * self.px_per_sec
-            loop_x_end = self.left_margin + loop_end * self.px_per_sec
+            loop_x_start = loop_start * self.px_per_sec  # No left_margin offset
+            loop_x_end = loop_end * self.px_per_sec
             
-            # Loop region highlight
+            # Loop region highlight on main canvas (full height)
             self.canvas.create_rectangle(
-                loop_x_start, self.ruler_height,
+                loop_x_start, 0,
                 loop_x_end, height,
                 fill="#10b981", stipple="gray25", outline=""
             )
             
-            # Loop start marker
-            self._draw_loop_marker(loop_x_start, height, "[")
+            # Draw loop markers on ruler canvas (fixed, doesn't scroll vertically)
+            ruler_canvas = self.ruler_canvas if hasattr(self, 'ruler_canvas') else self.canvas
             
-            # Loop end marker
-            self._draw_loop_marker(loop_x_end, height, "]", is_end=True)
+            # Loop start marker on ruler
+            self._draw_loop_marker(loop_x_start, "[", ruler_canvas)
+            
+            # Loop end marker on ruler
+            self._draw_loop_marker(loop_x_end, "]", ruler_canvas, is_end=True)
         except Exception:
             pass
 
-    def _draw_loop_marker(self, x, height, label, is_end=False):
-        """Draw a single loop marker."""
-        # Marker line
-        line_id = self.canvas.create_line(
-            x, self.ruler_height, x, height,
+    def _draw_loop_marker(self, x, label, target_canvas, is_end=False):
+        """Draw a single loop marker on the ruler canvas."""
+        # Marker line (vertical line in ruler area)
+        line_id = target_canvas.create_line(
+            x, 0, x, self.ruler_height,
             fill="#10b981", width=3, tags=f"loop_marker_{label.lower()}"
         )
         
-        # Marker flag (handle draggabile)
+        # Marker flag (handle draggabile) at bottom of ruler
+        marker_y = self.ruler_height - 2
         if is_end:
-            handle_id = self.canvas.create_polygon(
-                x, self.ruler_height,
-                x - 12, self.ruler_height + 6,
-                x, self.ruler_height + 12,
+            # End marker - triangle pointing left
+            handle_id = target_canvas.create_polygon(
+                x, marker_y,
+                x - 10, marker_y - 8,
+                x - 10, marker_y,
                 fill="#10b981", outline="#065f46", width=2,
                 tags=f"loop_marker_{label.lower()}"
             )
-            text_id = self.canvas.create_text(
-                x - 4, self.ruler_height + 6, text=label,
-                fill="#ffffff", font=("Segoe UI", 10, "bold"),
+            text_id = target_canvas.create_text(
+                x - 5, marker_y - 4, text=label,
+                fill="#ffffff", font=("Segoe UI", 9, "bold"),
                 tags=f"loop_marker_{label.lower()}"
             )
         else:
-            handle_id = self.canvas.create_polygon(
-                x, self.ruler_height,
-                x + 12, self.ruler_height + 6,
-                x, self.ruler_height + 12,
+            # Start marker - triangle pointing right
+            handle_id = target_canvas.create_polygon(
+                x, marker_y,
+                x + 10, marker_y - 8,
+                x + 10, marker_y,
                 fill="#10b981", outline="#065f46", width=2,
                 tags=f"loop_marker_{label.lower()}"
             )
-            text_id = self.canvas.create_text(
-                x + 4, self.ruler_height + 6, text=label,
-                fill="#ffffff", font=("Segoe UI", 10, "bold"),
+            text_id = target_canvas.create_text(
+                x + 5, marker_y - 4, text=label,
+                fill="#ffffff", font=("Segoe UI", 9, "bold"),
                 tags=f"loop_marker_{label.lower()}"
             )
         
@@ -557,7 +883,7 @@ class TimelineCanvas:
         except Exception:
             pass
         
-        cursor_x = self.left_margin + cur * self.px_per_sec
+        cursor_x = cur * self.px_per_sec  # No left_margin offset
         
         # Cursor line
         self.cursor_id = self.canvas.create_line(
@@ -582,7 +908,7 @@ class TimelineCanvas:
         if self.canvas is None:
             return
         
-        paste_x = self.left_margin + self.paste_position * self.px_per_sec
+        paste_x = self.paste_position * self.px_per_sec  # No left_margin offset
         
         # Paste cursor line (dashed, different color)
         self.canvas.create_line(
@@ -613,7 +939,7 @@ class TimelineCanvas:
         if self.canvas is None or self.cursor_id is None:
             return
             
-        x = self.left_margin + current_time * self.px_per_sec
+        x = current_time * self.px_per_sec  # No left_margin offset
         
         try:
             height = self.compute_height()
@@ -625,7 +951,7 @@ class TimelineCanvas:
             
             if x < vis_left or x > vis_right:
                 self.canvas.xview_moveto(
-                    max(0.0, (x - self.left_margin) / max(1, self.compute_width()))
+                    max(0.0, x / max(1, self.compute_width()))
                 )
         except Exception:
             pass
@@ -657,22 +983,102 @@ class TimelineCanvas:
             return time
         return self.project.snap_to_grid(time, self.grid_division)
 
+    def _find_control_at(self, x, y):
+        """Find which track control (button/slider) is at the given coordinates.
+        
+        Returns:
+            dict with 'type' (button/volume/pan), 'track_idx', and 'action' (mute/solo/fx)
+            or None if not on a control
+        """
+        if x >= self.left_margin:
+            return None  # Not in controls area
+        
+        if y <= self.ruler_height:
+            return None  # In ruler area
+        
+        # Calculate track index
+        track_idx = int((y - self.ruler_height) / self.track_height)
+        
+        if self.mixer is None or track_idx >= len(self.mixer.tracks):
+            return None
+        
+        # Calculate y position within track
+        y0 = self.ruler_height + track_idx * self.track_height
+        y_in_track = y - y0
+        
+        # Button positions (top-right of control area)
+        btn_y = 8
+        btn_x = self.left_margin - 95
+        
+        # Check buttons (M/S/FX)
+        if btn_y <= y_in_track <= btn_y + 18:
+            # Mute button
+            if btn_x <= x <= btn_x + 20:
+                return {'type': 'button', 'track_idx': track_idx, 'action': 'mute'}
+            # Solo button
+            elif btn_x + 25 <= x <= btn_x + 45:
+                return {'type': 'button', 'track_idx': track_idx, 'action': 'solo'}
+            # FX button
+            elif btn_x + 50 <= x <= btn_x + 72:
+                return {'type': 'button', 'track_idx': track_idx, 'action': 'fx'}
+        
+        # Volume slider
+        vol_y = 35
+        vol_x = 40
+        vol_width = self.left_margin - 100
+        
+        if vol_y - 4 <= y_in_track <= vol_y + 4:
+            if vol_x <= x <= vol_x + vol_width:
+                return {'type': 'volume', 'track_idx': track_idx}
+        
+        # Pan slider
+        pan_y = 55
+        if pan_y - 4 <= y_in_track <= pan_y + 4:
+            if vol_x <= x <= vol_x + vol_width:
+                return {'type': 'pan', 'track_idx': track_idx}
+        
+        return None
+
     # Mouse event handlers
     def on_click(self, event):
         """Handle mouse click."""
+        # Determine which canvas was clicked
+        widget = event.widget
+        
+        if widget == self.controls_canvas:
+            # Click on controls canvas - only handle control interactions
+            x = self.controls_canvas.canvasx(event.x)
+            y = self.controls_canvas.canvasy(event.y)
+            
+            control = self._find_control_at(x, y)
+            if control:
+                self._handle_control_click(control, x, y)
+            return
+        
+        # Click on ruler canvas - handle loop markers
+        if hasattr(self, 'ruler_canvas') and widget == self.ruler_canvas:
+            x = self.ruler_canvas.canvasx(event.x)
+            y = event.y  # ruler_canvas doesn't scroll vertically
+            
+            # Check if clicking on loop markers
+            if self._check_loop_marker_click_on_ruler(x, y):
+                return
+            return
+        
+        # Click on main timeline canvas
         if self.canvas is None:
             return
             
         x = self.canvas.canvasx(event.x)
         y = self.canvas.canvasy(event.y)
         
-        # Check if clicking on loop markers
+        # Check if clicking on loop markers (legacy, now on ruler)
         if self._check_loop_marker_click(x, y):
             return
         
         # Check for loop region selection with Shift
         if event.state & 0x0001:  # Shift key
-            time = (x - self.left_margin) / self.px_per_sec
+            time = x / self.px_per_sec  # No left_margin offset needed anymore
             self.loop_selection_start = max(0, time)
             return
         
@@ -684,8 +1090,8 @@ class TimelineCanvas:
         
         if clicked_clip:
             track_idx, clip = clicked_clip
-            clip_x0 = self.left_margin + clip.start_time * self.px_per_sec
-            clip_x1 = self.left_margin + clip.end_time * self.px_per_sec
+            clip_x0 = clip.start_time * self.px_per_sec  # No left_margin offset
+            clip_x1 = clip.end_time * self.px_per_sec
             
             # Check for edge resize (only if single clip selected)
             if not ctrl_pressed and abs(x - clip_x0) < 8:
@@ -732,9 +1138,92 @@ class TimelineCanvas:
                 # Hide paste cursor if clipboard is empty
                 self.paste_cursor_visible = False
                 self.redraw()
+    
+    def _handle_control_click(self, control, x, y):
+        """Handle click on a track control (button or slider)."""
+        control_type = control['type']
+        track_idx = control['track_idx']
+        
+        if control_type == 'button':
+            action = control['action']
+            if action == 'mute':
+                self._toggle_mute(track_idx)
+            elif action == 'solo':
+                self._toggle_solo(track_idx)
+            elif action == 'fx':
+                self._open_effects_dialog(track_idx)
+        
+        elif control_type == 'volume':
+            # Start volume drag
+            self.dragging_volume = {
+                'track': track_idx,
+                'start_x': x,
+                'start_vol': self.mixer.tracks[track_idx].get('volume', 1.0)
+            }
+        
+        elif control_type == 'pan':
+            # Start pan drag
+            self.dragging_pan = {
+                'track': track_idx,
+                'start_x': x,
+                'start_pan': self.mixer.tracks[track_idx].get('pan', 0.0)
+            }
+    
+    def _toggle_mute(self, track_idx):
+        """Toggle mute for a track."""
+        if self.mixer is None or track_idx >= len(self.mixer.tracks):
+            return
+        
+        try:
+            is_muted = self.mixer.toggle_mute(track_idx)
+            track_name = self.mixer.tracks[track_idx].get("name", f"Track {track_idx + 1}")
+            print(f"🔇 Muted: {track_name}" if is_muted else f"🔊 Unmuted: {track_name}")
+            self.redraw()
+        except Exception as e:
+            print(f"Error toggling mute: {e}")
+    
+    def _toggle_solo(self, track_idx):
+        """Toggle solo for a track."""
+        if self.mixer is None or track_idx >= len(self.mixer.tracks):
+            return
+        
+        try:
+            is_soloed = self.mixer.toggle_solo(track_idx)
+            track_name = self.mixer.tracks[track_idx].get("name", f"Track {track_idx + 1}")
+            print(f"🎯 Soloed: {track_name}" if is_soloed else f"▶ Unsoloed: {track_name}")
+            self.redraw()
+        except Exception as e:
+            print(f"Error toggling solo: {e}")
+    
+    def _open_effects_dialog(self, track_idx):
+        """Open effects chain dialog for the given track."""
+        if self.project is None or track_idx >= len(self.project.tracks):
+            return
+        
+        track = self.project.tracks[track_idx]
+        track_name = getattr(track, 'name', f"Track {track_idx + 1}")
+        
+        try:
+            from .dialogs.effects_chain_dialog import EffectsChainDialog
+            # Get parent window from canvas
+            parent = self.canvas.winfo_toplevel()
+            EffectsChainDialog(parent, track, track_name, redraw_cb=self.redraw)
+        except Exception as e:
+            print(f"Error opening effects dialog: {e}")
+            import traceback
+            traceback.print_exc()
 
     def on_drag(self, event):
         """Handle mouse drag."""
+        widget = event.widget
+        
+        # Handle drag on ruler canvas (for loop markers)
+        if hasattr(self, 'ruler_canvas') and widget == self.ruler_canvas:
+            x = self.ruler_canvas.canvasx(event.x)
+            if self.dragging_loop_marker is not None:
+                self._handle_loop_marker_drag(x)
+            return
+        
         if self.canvas is None:
             return
             
@@ -746,19 +1235,29 @@ class TimelineCanvas:
             self._handle_loop_marker_drag(x)
             return
         
+        # Drag volume slider
+        if self.dragging_volume is not None:
+            self._handle_volume_drag(x)
+            return
+        
+        # Drag pan slider
+        if self.dragging_pan is not None:
+            self._handle_pan_drag(x)
+            return
+        
         # Loop region selection with Shift
         if self.loop_selection_start is not None:
             # Disegna preview del loop durante il drag
             self.canvas.delete("loop_preview")
             
-            end_time = (x - self.left_margin) / self.px_per_sec
+            end_time = x / self.px_per_sec  # No left_margin offset
             end_time = max(0, end_time)
             
             start_time = self.loop_selection_start
             
             # Visualizza l'area che sarà selezionata
-            loop_x_start = self.left_margin + min(start_time, end_time) * self.px_per_sec
-            loop_x_end = self.left_margin + max(start_time, end_time) * self.px_per_sec
+            loop_x_start = min(start_time, end_time) * self.px_per_sec  # No left_margin offset
+            loop_x_end = max(start_time, end_time) * self.px_per_sec
             
             height = self.compute_height()
             self.canvas.create_rectangle(
@@ -778,13 +1277,92 @@ class TimelineCanvas:
             self._handle_resize(x)
         elif self.drag_data:
             self._handle_drag(x, y)
+    
+    def _handle_volume_drag(self, x):
+        """Handle volume slider dragging."""
+        if self.dragging_volume is None or self.mixer is None:
+            return
+        
+        track_idx = self.dragging_volume['track']
+        if track_idx >= len(self.mixer.tracks):
+            return
+        
+        # Calculate new volume based on mouse position
+        vol_x = 40
+        vol_width = self.left_margin - 100
+        
+        # Clamp x to slider bounds
+        x = max(vol_x, min(x, vol_x + vol_width))
+        
+        # Calculate volume (0.0 to 1.0)
+        volume = (x - vol_x) / vol_width
+        volume = max(0.0, min(1.0, volume))
+        
+        # Update mixer
+        self.mixer.tracks[track_idx]['volume'] = volume
+        
+        # Redraw to show updated slider
+        self.redraw()
+    
+    def _handle_pan_drag(self, x):
+        """Handle pan slider dragging."""
+        if self.dragging_pan is None or self.mixer is None:
+            return
+        
+        track_idx = self.dragging_pan['track']
+        if track_idx >= len(self.mixer.tracks):
+            return
+        
+        # Calculate new pan based on mouse position
+        pan_x = 40
+        pan_width = self.left_margin - 100
+        center_x = pan_x + pan_width // 2
+        
+        # Clamp x to slider bounds
+        x = max(pan_x, min(x, pan_x + pan_width))
+        
+        # Calculate pan (-1.0 to 1.0)
+        pan = (x - center_x) / (pan_width / 2)
+        pan = max(-1.0, min(1.0, pan))
+        
+        # Snap to center if close
+        if abs(pan) < 0.05:
+            pan = 0.0
+        
+        # Update mixer
+        self.mixer.tracks[track_idx]['pan'] = pan
+        
+        # Redraw to show updated slider
+        self.redraw()
 
     def on_release(self, event):
         """Handle mouse release."""
+        widget = event.widget
+        
         # Release loop marker drag
         if self.dragging_loop_marker is not None:
             self.dragging_loop_marker = None
-            self.canvas.config(cursor="")
+            # Reset cursor on appropriate canvas
+            if hasattr(self, 'ruler_canvas') and widget == self.ruler_canvas:
+                self.ruler_canvas.config(cursor="")
+            elif self.canvas:
+                self.canvas.config(cursor="")
+            return
+        
+        # Release volume/pan dragging
+        if self.dragging_volume is not None:
+            track_idx = self.dragging_volume['track']
+            volume = self.mixer.tracks[track_idx].get('volume', 1.0)
+            print(f"🔊 Volume adjusted: Track {track_idx + 1} = {volume:.2f}")
+            self.dragging_volume = None
+            return
+        
+        if self.dragging_pan is not None:
+            track_idx = self.dragging_pan['track']
+            pan = self.mixer.tracks[track_idx].get('pan', 0.0)
+            pan_text = "C" if abs(pan) < 0.05 else (f"L{abs(pan):.1f}" if pan < 0 else f"R{pan:.1f}")
+            print(f"🎚️ Pan adjusted: Track {track_idx + 1} = {pan_text}")
+            self.dragging_pan = None
             return
         
         # Check loop region selection
@@ -792,7 +1370,7 @@ class TimelineCanvas:
             self.canvas.delete("loop_preview")
             
             x = self.canvas.canvasx(event.x)
-            end_time = (x - self.left_margin) / self.px_per_sec
+            end_time = x / self.px_per_sec  # No left_margin offset
             end_time = max(0, end_time)
             
             start = self.snap_time(min(self.loop_selection_start, end_time))
@@ -819,11 +1397,44 @@ class TimelineCanvas:
 
     def on_motion(self, event):
         """Handle mouse motion for cursor changes."""
-        if self.canvas is None or self.drag_data or self.resize_data or self.dragging_loop_marker:
+        widget = event.widget
+        
+        # Handle motion on ruler canvas
+        if hasattr(self, 'ruler_canvas') and widget == self.ruler_canvas:
+            # Don't change cursor while dragging
+            if self.dragging_loop_marker:
+                return
+            
+            x = self.ruler_canvas.canvasx(event.x)
+            y = event.y
+            
+            # Check if hovering over loop markers on ruler
+            if self._is_over_loop_marker_on_ruler(x, y):
+                self.ruler_canvas.config(cursor="sb_h_double_arrow")
+            else:
+                self.ruler_canvas.config(cursor="")
+            return
+        
+        if self.canvas is None:
+            return
+        
+        # Don't change cursor while dragging
+        if (self.drag_data or self.resize_data or self.dragging_loop_marker or 
+            self.dragging_volume or self.dragging_pan):
             return
             
         x = self.canvas.canvasx(event.x)
         y = self.canvas.canvasy(event.y)
+        
+        # Check if hovering over track controls
+        control = self._find_control_at(x, y)
+        if control:
+            control_type = control['type']
+            if control_type == 'button':
+                self.canvas.config(cursor="hand2")
+            elif control_type in ('volume', 'pan'):
+                self.canvas.config(cursor="sb_h_double_arrow")
+            return
         
         # Check if hovering over loop markers
         if self._is_over_loop_marker(x, y):
@@ -846,7 +1457,7 @@ class TimelineCanvas:
 
     def on_right_click(self, event):
         """Handle right-click context menu."""
-        # This will be handled by MainWindow for now
+        # This will be handled by MainWindow
         pass
 
     def _find_clip_at(self, x, y):
@@ -865,7 +1476,7 @@ class TimelineCanvas:
     def _handle_resize(self, x):
         """Handle clip resize."""
         clip = self.resize_data["clip"]
-        new_time = (x - self.left_margin) / self.px_per_sec
+        new_time = x / self.px_per_sec  # No left_margin offset
         new_time = max(0, new_time)
         new_time = self.snap_time(new_time)
         
@@ -1135,8 +1746,39 @@ class TimelineCanvas:
         except Exception:
             return "#60a5fa"
 
+    def _check_loop_marker_click_on_ruler(self, x, y):
+        """Check if click is on a loop marker in the ruler canvas and start dragging."""
+        if self.player is None:
+            return False
+        
+        try:
+            loop_enabled, loop_start, loop_end = self.player.get_loop()
+            if not loop_enabled:
+                return False
+            
+            loop_x_start = loop_start * self.px_per_sec
+            loop_x_end = loop_end * self.px_per_sec
+            
+            # Check click on start marker (15px tolerance)
+            if abs(x - loop_x_start) < 15 and 0 <= y <= self.ruler_height:
+                self.dragging_loop_marker = "start"
+                if hasattr(self, 'ruler_canvas'):
+                    self.ruler_canvas.config(cursor="sb_h_double_arrow")
+                return True
+            
+            # Check click on end marker
+            if abs(x - loop_x_end) < 15 and 0 <= y <= self.ruler_height:
+                self.dragging_loop_marker = "end"
+                if hasattr(self, 'ruler_canvas'):
+                    self.ruler_canvas.config(cursor="sb_h_double_arrow")
+                return True
+        except Exception:
+            pass
+        
+        return False
+    
     def _check_loop_marker_click(self, x, y):
-        """Check if click is on a loop marker and start dragging."""
+        """Check if click is on a loop marker and start dragging (legacy, for main canvas)."""
         if self.player is None or y > self.ruler_height + 30:
             return False
         
@@ -1145,8 +1787,8 @@ class TimelineCanvas:
             if not loop_enabled:
                 return False
             
-            loop_x_start = self.left_margin + loop_start * self.px_per_sec
-            loop_x_end = self.left_margin + loop_end * self.px_per_sec
+            loop_x_start = loop_start * self.px_per_sec  # No left_margin offset
+            loop_x_end = loop_end * self.px_per_sec
             
             # Check click on start marker (15px tolerance)
             if abs(x - loop_x_start) < 15:
@@ -1163,6 +1805,28 @@ class TimelineCanvas:
             pass
         
         return False
+    
+    def _is_over_loop_marker_on_ruler(self, x, y):
+        """Check if mouse is over a loop marker on the ruler canvas."""
+        if self.player is None:
+            return False
+        
+        try:
+            loop_enabled, loop_start, loop_end = self.player.get_loop()
+            if not loop_enabled:
+                return False
+            
+            loop_x_start = loop_start * self.px_per_sec
+            loop_x_end = loop_end * self.px_per_sec
+            
+            # Check if hovering over markers in ruler area
+            if 0 <= y <= self.ruler_height:
+                if abs(x - loop_x_start) < 15 or abs(x - loop_x_end) < 15:
+                    return True
+        except Exception:
+            pass
+        
+        return False
 
     def _is_over_loop_marker(self, x, y):
         """Check if mouse is over a loop marker."""
@@ -1174,8 +1838,8 @@ class TimelineCanvas:
             if not loop_enabled:
                 return False
             
-            loop_x_start = self.left_margin + loop_start * self.px_per_sec
-            loop_x_end = self.left_margin + loop_end * self.px_per_sec
+            loop_x_start = loop_start * self.px_per_sec  # No left_margin offset
+            loop_x_end = loop_end * self.px_per_sec
             
             return abs(x - loop_x_start) < 15 or abs(x - loop_x_end) < 15
         except Exception:
@@ -1186,7 +1850,7 @@ class TimelineCanvas:
         if self.player is None:
             return
         
-        new_time = (x - self.left_margin) / self.px_per_sec
+        new_time = x / self.px_per_sec  # No left_margin offset
         new_time = max(0, new_time)
         new_time = self.snap_time(new_time)
         

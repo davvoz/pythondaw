@@ -10,12 +10,11 @@ except Exception:  # pragma: no cover
     filedialog = None
 
 from .timeline_canvas import TimelineCanvas
-from .track_controls import TrackControls
 from .menu_manager import MenuManager
 from .toolbar_manager import ToolbarManager
 from .theme_manager import ThemeManager
 from .dialogs.add_track_dialog import AddTrackDialog
-from .context_menus import ClipContextMenu
+from .context_menus import ClipContextMenu, TrackContextMenu
 
 
 class MainWindow:
@@ -34,13 +33,20 @@ class MainWindow:
         self._root = None
         self._status = None
         self._zoom_label = None
+        self._current_track_idx = 0  # Currently selected track for operations
         
         # Component managers (OOP refactoring)
         self._timeline_canvas = None
-        self._track_controls = None
+        self._track_controls = None  # Deprecated - now in canvas
         self._menu_manager = None
         self._toolbar_manager = None
         self._clip_menu = None
+        
+        # Master controls
+        self._master_volume_var = None
+        self._master_vol_label = None
+        self._meter_L = None
+        self._meter_R = None
         
         # Update jobs
         self._time_job = None
@@ -73,15 +79,7 @@ class MainWindow:
         self._root.geometry("1200x700")
         self._root.configure(bg="#1e1e1e")
 
-        # Setup UI components
-        self._setup_theme()
-        self._setup_menu()
-        self._setup_toolbar()
-        self._setup_main_layout()
-        self._setup_status_bar()
-        self._bind_keys()
-        
-        # Prepare context menu helper
+        # Prepare context menu helpers
         self._clip_menu = ClipContextMenu(
             self._root,
             on_delete=self._delete_selected_clips,
@@ -90,6 +88,23 @@ class MainWindow:
             on_copy=self._copy_selection,
             on_paste=self._paste_clips
         )
+        
+        self._track_menu = TrackContextMenu(
+            self._root,
+            on_add_audio_clip=self._add_audio_clip_to_track,
+            on_rename=self._rename_track,
+            on_delete=self._delete_track,
+            on_duplicate=self._duplicate_track,
+            on_color=self._change_track_color
+        )
+
+        # Setup UI components
+        self._setup_theme()
+        self._setup_menu()
+        self._setup_toolbar()
+        self._setup_main_layout()
+        self._setup_status_bar()
+        self._bind_keys()
         
         self.is_open = True
         print("GUI window created. If you don't see it, check the taskbar and ensure it's not behind other windows.")
@@ -128,6 +143,7 @@ class MainWindow:
         callbacks = {
             'play': self._on_play,
             'stop': self._on_stop,
+            'add_track': self._add_track_dialog,
             'zoom_in': lambda: self._zoom(1.25),
             'zoom_out': lambda: self._zoom(0.8),
             'zoom_reset': self._zoom_reset,
@@ -147,15 +163,12 @@ class MainWindow:
             self._root.after(1000, lambda: self._status.set("💡 Shift+Drag to set loop | Drag loop markers to adjust"))
 
     def _setup_main_layout(self):
-        """Setup the main layout with sidebar and timeline."""
+        """Setup the main layout with timeline canvas only."""
         # Main container
         main_container = ttk.Frame(self._root)
         main_container.pack(fill="both", expand=True)
         
-        # LEFT SIDEBAR (300px width)
-        sidebar = self._create_sidebar(main_container)
-        
-        # RIGHT SIDE: Timeline area
+        # Timeline area (full width, no sidebar)
         timeline_container = ttk.Frame(main_container)
         timeline_container.pack(fill="both", expand=True, side="left")
         
@@ -168,66 +181,83 @@ class MainWindow:
             self.player
         )
         
-        # Bind context menu to timeline
+        # Set track context menu reference
+        self._timeline_canvas.track_menu = self._track_menu
+        
+        # Bind context menus to both canvases
         if self._timeline_canvas.canvas:
             self._timeline_canvas.canvas.bind('<Button-3>', self._on_timeline_right_click)
+        if self._timeline_canvas.controls_canvas:
+            self._timeline_canvas.controls_canvas.bind('<Button-3>', self._on_track_controls_right_click)
         
         # Initial draw
         self._timeline_canvas.redraw()
-        
-        # Populate tracks
-        self._track_controls.populate_tracks(self.timeline)
-
-    def _create_sidebar(self, parent):
-        """Create the left sidebar with track controls."""
-        sidebar = ttk.Frame(parent, style="Sidebar.TFrame", width=300)
-        sidebar.pack(fill="y", side="left")
-        sidebar.pack_propagate(False)
-        
-        # Project info header
-        project_name = getattr(self.project, "name", "Untitled Project")
-        proj_header = ttk.Frame(sidebar, style="Sidebar.TFrame")
-        proj_header.pack(fill="x", padx=12, pady=(8, 4))
-        ttk.Label(
-            proj_header, text=project_name,
-            style="Sidebar.TLabel",
-            font=("Segoe UI", 11, "bold")
-        ).pack(anchor="w")
-        
-        # Add track button
-        btn_container = ttk.Frame(sidebar, style="Sidebar.TFrame")
-        btn_container.pack(fill="x", padx=12, pady=(4, 4))
-        ttk.Button(
-            btn_container, text="+",
-            command=self._add_track_dialog,
-            style="Tool.TButton", width=3
-        ).pack(side="left")
-        
-        # Create track controls
-        self._track_controls = TrackControls(
-            sidebar,
-            self.mixer,
-            timeline=self.timeline,
-            project=self.project,
-            redraw_cb=lambda: self._timeline_canvas.redraw() if self._timeline_canvas else None,
-        )
-        self._track_controls.build_ui()
-        
-        return sidebar
 
     def _setup_status_bar(self):
-        """Setup the status bar at the bottom."""
-        status_bar = ttk.Frame(self._root, style="Toolbar.TFrame", height=28)
+        """Setup the status bar at the bottom with master controls."""
+        status_bar = ttk.Frame(self._root, style="Toolbar.TFrame", height=32)
         status_bar.pack(fill="x", side="bottom")
         status_bar.pack_propagate(False)
         
+        # Left: Status message
         self._status = tk.StringVar(value="● Ready")
         status_lbl = ttk.Label(status_bar, textvariable=self._status, style="Status.TLabel")
         status_lbl.pack(side="left", padx=8)
         
-        zoom_info = ttk.Label(status_bar, text="Zoom: 1.00x", style="Status.TLabel")
-        zoom_info.pack(side="right", padx=8)
+        # Right side: Master controls
+        master_frame = ttk.Frame(status_bar, style="Toolbar.TFrame")
+        master_frame.pack(side="right", padx=8)
+        
+        # Zoom info
+        zoom_info = ttk.Label(master_frame, text="Zoom: 1.00x", style="Status.TLabel")
+        zoom_info.pack(side="right", padx=(0, 12))
         self._zoom_label = zoom_info
+        
+        # Master volume
+        ttk.Label(master_frame, text="🔊 Master:", style="Status.TLabel").pack(side="right", padx=(12, 4))
+        
+        self._master_volume_var = tk.DoubleVar(value=getattr(self.mixer, 'master_volume', 1.0))
+        master_vol_scale = ttk.Scale(
+            master_frame, from_=0.0, to=1.0, orient="horizontal",
+            variable=self._master_volume_var,
+            command=self._on_master_volume_change,
+            length=100
+        )
+        master_vol_scale.pack(side="right", padx=4)
+        
+        self._master_vol_label = ttk.Label(master_frame, text="1.00", style="Status.TLabel", width=4)
+        self._master_vol_label.pack(side="right", padx=4)
+        
+        # Output meters (L/R)
+        ttk.Label(master_frame, text="L", style="Status.TLabel", width=2).pack(side="right", padx=(12, 2))
+        self._meter_L = ttk.Progressbar(
+            master_frame, mode="determinate", maximum=1.0,
+            style="Meter.Horizontal.TProgressbar", length=60
+        )
+        self._meter_L.pack(side="right", padx=2)
+        
+        ttk.Label(master_frame, text="R", style="Status.TLabel", width=2).pack(side="right", padx=(8, 2))
+        self._meter_R = ttk.Progressbar(
+            master_frame, mode="determinate", maximum=1.0,
+            style="Meter.Horizontal.TProgressbar", length=60
+        )
+        self._meter_R.pack(side="right", padx=2)
+    
+    def _on_master_volume_change(self, value=None):
+        """Handle master volume change."""
+        if self.mixer is None:
+            return
+        try:
+            vol = float(self._master_volume_var.get())
+            if hasattr(self.mixer, 'set_master_volume'):
+                self.mixer.set_master_volume(vol)
+            else:
+                self.mixer.master_volume = vol
+            
+            if self._master_vol_label:
+                self._master_vol_label.configure(text=f"{vol:.2f}")
+        except Exception as e:
+            print(f"Error updating master volume: {e}")
 
     def _bind_keys(self):
         """Bind keyboard shortcuts."""
@@ -534,19 +564,38 @@ class MainWindow:
 
     def _schedule_meter_update(self):
         """Schedule meter updates."""
-        if self._root is None or self._track_controls is None:
+        if self._root is None:
             return
         
-        self._track_controls.update_meters(self.player)
+        # Update master meters
+        if self.player and hasattr(self, '_meter_L') and hasattr(self, '_meter_R'):
+            try:
+                peakL = float(getattr(self.player, "_last_peak_L", 0.0))
+                peakR = float(getattr(self.player, "_last_peak_R", 0.0))
+                
+                self._meter_L['value'] = max(0.0, min(1.0, peakL))
+                self._meter_R['value'] = max(0.0, min(1.0, peakR))
+            except Exception:
+                pass
+        
         self._meter_job = self._root.after(100, self._schedule_meter_update)
 
+    def _get_current_track_index(self):
+        """Get currently selected track index."""
+        return self._current_track_idx
+    
+    def _set_current_track_index(self, idx):
+        """Set currently selected track index."""
+        if idx is not None and 0 <= idx < len(self.mixer.tracks):
+            self._current_track_idx = idx
+    
     # Track/Clip management methods
     def _add_dummy_clip(self):
         """Add a short sine wave clip at current time on selected track."""
         if self.timeline is None:
             return
         
-        track_idx = self._track_controls.get_current_track_index()
+        track_idx = self._get_current_track_index()
         if track_idx is None:
             if self._status:
                 self._status.set("⚠ Select a track first")
@@ -567,7 +616,7 @@ class MainWindow:
         from src.audio.clip import AudioClip
         self.timeline.add_clip(track_idx, AudioClip("sine440", buf, sr, start_time=cur))
         
-        self._track_controls.populate_tracks(self.timeline)
+        if self._timeline_canvas: self._timeline_canvas.redraw()
         if self._timeline_canvas:
             self._timeline_canvas.redraw()
         
@@ -580,7 +629,7 @@ class MainWindow:
         if self.timeline is None or self.mixer is None or filedialog is None:
             return
         
-        track_idx = self._track_controls.get_current_track_index()
+        track_idx = self._get_current_track_index()
         if track_idx is None:
             if self._status:
                 self._status.set("⚠ Select a track first")
@@ -648,7 +697,7 @@ class MainWindow:
                 
                 # Add to timeline
                 self.timeline.add_clip(track_idx, clip)
-                self._track_controls.populate_tracks(self.timeline)
+                if self._timeline_canvas: self._timeline_canvas.redraw()
                 if self._timeline_canvas:
                     self._timeline_canvas.redraw()
                 
@@ -724,7 +773,7 @@ class MainWindow:
         if not self.timeline or not self.mixer:
             return
         
-        track_idx = self._track_controls.get_current_track_index()
+        track_idx = self._get_current_track_index()
         if track_idx is None:
             if self._status:
                 self._status.set("⚠ Select a track first")
@@ -755,7 +804,7 @@ class MainWindow:
             clip = AudioClip(clip_name, buffer, sr, start_time=cur, file_path=file_path)
             
             self.timeline.add_clip(track_idx, clip)
-            self._track_controls.populate_tracks(self.timeline)
+            if self._timeline_canvas: self._timeline_canvas.redraw()
             if self._timeline_canvas:
                 self._timeline_canvas.redraw()
             
@@ -830,14 +879,191 @@ class MainWindow:
         track.set_volume(1.0)
         self.project.create_track(track)
         
-        self._track_controls.populate_tracks(self.timeline)
+        if self._timeline_canvas: self._timeline_canvas.redraw()
         
         if self._timeline_canvas:
             self._timeline_canvas.redraw()
         
         if self._status:
             self._status.set(f"✓ Track '{track_name}' added")
+    
+    def _add_audio_clip_to_track(self, track_idx):
+        """Add an audio clip to a specific track."""
+        if self.timeline is None or self.mixer is None or filedialog is None:
+            return
+        
+        if track_idx >= len(self.mixer.tracks):
+            if self._status:
+                self._status.set("⚠ Invalid track index")
+            return
+        
+        try:
+            from src.utils.audio_io import get_supported_formats, load_audio_file
+            from src.audio.clip import AudioClip
+            import os
+            
+            filetypes = get_supported_formats()
+            
+            file_path = filedialog.askopenfilename(
+                title="Add Audio Clip",
+                filetypes=filetypes
+            )
+            
+            if not file_path:
+                return
+            
+            if self._status:
+                self._status.set("⏳ Loading audio file...")
+            
+            # Load audio file
+            target_sr = 44100
+            buffer, sr = load_audio_file(file_path, target_sr=target_sr)
+            
+            # Get current playhead position
+            cur = 0.0
+            try:
+                cur = float(getattr(self.player, "_current_time", 0.0))
+            except Exception:
+                pass
+            
+            # Create clip
+            clip_name = os.path.splitext(os.path.basename(file_path))[0]
+            clip = AudioClip(clip_name, buffer, sr, start_time=cur, file_path=file_path)
+            
+            # Add to timeline
+            self.timeline.add_clip(track_idx, clip)
+            if self._timeline_canvas:
+                self._timeline_canvas.redraw()
+            
+            # Success feedback
+            track_name = self.mixer.tracks[track_idx].get("name", f"Track {track_idx+1}")
+            if self._status:
+                self._status.set(f"✓ Added '{clip_name}' to '{track_name}'")
+            print(f"🎵 Added clip '{clip_name}' to track {track_idx} ('{track_name}')")
+            
+        except Exception as e:
+            if self._status:
+                self._status.set(f"⚠ Error loading audio: {e}")
+            print(f"Error loading audio: {e}")
+    
+    def _rename_track(self, track_idx):
+        """Rename a track."""
+        if self.mixer is None or track_idx >= len(self.mixer.tracks):
+            return
+        
+        import tkinter.simpledialog as simpledialog
+        current_name = self.mixer.tracks[track_idx].get("name", f"Track {track_idx+1}")
+        
+        new_name = simpledialog.askstring(
+            "Rename Track",
+            f"Enter new name for '{current_name}':",
+            initialvalue=current_name
+        )
+        
+        if new_name and new_name.strip():
+            self.mixer.tracks[track_idx]["name"] = new_name.strip()
+            if self._timeline_canvas:
+                self._timeline_canvas.redraw()
+            if self._status:
+                self._status.set(f"✓ Track renamed to '{new_name.strip()}'")
+    
+    def _delete_track(self, track_idx):
+        """Delete a track."""
+        if self.mixer is None or track_idx >= len(self.mixer.tracks):
+            return
+        
+        track_name = self.mixer.tracks[track_idx].get("name", f"Track {track_idx+1}")
+        
+        # Confirm deletion
+        if messagebox:
+            confirm = messagebox.askyesno(
+                "Delete Track",
+                f"Are you sure you want to delete '{track_name}'?\nAll clips on this track will be removed."
+            )
+            if not confirm:
+                return
+        
+        # Remove from mixer and timeline
+        self.mixer.tracks.pop(track_idx)
+        self.timeline.tracks.pop(track_idx)
+        
+        if self._timeline_canvas:
+            self._timeline_canvas.redraw()
+        
+        if self._status:
+            self._status.set(f"✓ Track '{track_name}' deleted")
+    
+    def _duplicate_track(self, track_idx):
+        """Duplicate a track with all its clips."""
+        if self.mixer is None or track_idx >= len(self.mixer.tracks):
+            return
+        
+        # Duplicate mixer track
+        original_track = self.mixer.tracks[track_idx]
+        new_track = {
+            "name": original_track.get("name", f"Track {track_idx+1}") + " (copy)",
+            "volume": original_track.get("volume", 1.0),
+            "pan": original_track.get("pan", 0.0),
+            "mute": original_track.get("mute", False),
+            "solo": original_track.get("solo", False),
+            "color": original_track.get("color", "#3b82f6")
+        }
+        self.mixer.tracks.append(new_track)
+        
+        # Duplicate timeline clips
+        self.timeline.tracks.append([])
+        for clip in self.timeline.tracks[track_idx]:
+            new_clip = clip.copy()
+            self.timeline.tracks[-1].append(new_clip)
+        
+        if self._timeline_canvas:
+            self._timeline_canvas.redraw()
+        
+        if self._status:
+            self._status.set(f"✓ Track duplicated: '{new_track['name']}'")
+    
+    def _change_track_color(self, track_idx):
+        """Change the color of a track."""
+        if self.mixer is None or track_idx >= len(self.mixer.tracks):
+            return
+        
+        from tkinter import colorchooser
+        
+        current_color = self.mixer.tracks[track_idx].get("color", "#3b82f6")
+        color = colorchooser.askcolor(
+            title="Choose Track Color",
+            initialcolor=current_color
+        )
+        
+        if color and color[1]:  # color[1] is the hex value
+            self.mixer.tracks[track_idx]["color"] = color[1]
+            if self._timeline_canvas:
+                self._timeline_canvas.redraw()
+            if self._status:
+                self._status.set(f"✓ Track color changed")
 
+    def _on_track_controls_right_click(self, event):
+        """Handle right-click on track controls area (left side)."""
+        if not self._timeline_canvas or not self._timeline_canvas.controls_canvas:
+            return
+        
+        x = self._timeline_canvas.controls_canvas.canvasx(event.x)
+        y = self._timeline_canvas.controls_canvas.canvasy(event.y)
+        
+        # Find which track was clicked
+        if y <= self._timeline_canvas.ruler_height:
+            return  # Clicked on ruler
+        
+        track_idx = int((y - self._timeline_canvas.ruler_height) / self._timeline_canvas.track_height)
+        
+        if self.mixer is None or track_idx >= len(self.mixer.tracks):
+            return
+        
+        # Show track context menu
+        if self._track_menu:
+            track_name = self.mixer.tracks[track_idx].get("name", f"Track {track_idx+1}")
+            self._track_menu.show(event, track_name, track_idx)
+    
     def _on_timeline_right_click(self, event):
         """Handle right-click context menu on timeline."""
         if not self._timeline_canvas or not self._timeline_canvas.canvas:
@@ -882,8 +1108,16 @@ class MainWindow:
         if tk is None or self._root is None:
             return
         
-        # Set paste position at click location
-        time = (x - self._timeline_canvas.left_margin) / self._timeline_canvas.px_per_sec
+        # Determine which track was clicked
+        track_idx = None
+        track_name = None
+        if y > self._timeline_canvas.ruler_height:
+            track_idx = int((y - self._timeline_canvas.ruler_height) / self._timeline_canvas.track_height)
+            if self.mixer and track_idx < len(self.mixer.tracks):
+                track_name = self.mixer.tracks[track_idx].get("name", f"Track {track_idx+1}")
+        
+        # Set paste position at click location (no left_margin offset needed)
+        time = x / self._timeline_canvas.px_per_sec
         self._timeline_canvas.paste_position = max(0, self._timeline_canvas.snap_time(time))
         self._timeline_canvas.paste_cursor_visible = bool(self._timeline_canvas.clipboard)
         self._timeline_canvas.redraw()
@@ -897,6 +1131,14 @@ class MainWindow:
             state="disabled",
             foreground="#888888"
         )
+        
+        # Add Audio Clip option (if on a valid track)
+        if track_idx is not None and track_name:
+            menu.add_command(
+                label=f"🎵 Add Audio Clip to '{track_name}'",
+                command=lambda: self._add_audio_clip_to_track(track_idx)
+            )
+        
         menu.add_separator()
         
         # Paste option (enabled only if clipboard has content)
@@ -931,7 +1173,7 @@ class MainWindow:
         self.timeline.remove_clip(track_idx, clip)
         self._timeline_canvas.selected_clip = None
         self._timeline_canvas.selected_clips = []
-        self._track_controls.populate_tracks(self.timeline)
+        if self._timeline_canvas: self._timeline_canvas.redraw()
         self._timeline_canvas.redraw()
         
         if self._status:
@@ -952,7 +1194,7 @@ class MainWindow:
             self.timeline.remove_clip(track_idx, clip)
         
         self._timeline_canvas.clear_selection()
-        self._track_controls.populate_tracks(self.timeline)
+        if self._timeline_canvas: self._timeline_canvas.redraw()
         self._timeline_canvas.redraw()
         
         if self._status:
@@ -984,7 +1226,7 @@ class MainWindow:
         pasted_clips = self._timeline_canvas.paste_clips()
         
         if pasted_clips:
-            self._track_controls.populate_tracks(self.timeline)
+            if self._timeline_canvas: self._timeline_canvas.redraw()
             if self._status:
                 self._status.set(f"📌 Pasted {len(pasted_clips)} clip(s)")
         else:
@@ -1052,7 +1294,7 @@ class MainWindow:
             pasted_clips = self._timeline_canvas.paste_clips(at_time=loop_end)
             
             if pasted_clips:
-                self._track_controls.populate_tracks(self.timeline)
+                if self._timeline_canvas: self._timeline_canvas.redraw()
                 if self._status:
                     self._status.set(f"📌 Pasted {len(pasted_clips)} clip(s) at loop end ({loop_end:.2f}s)")
             else:
@@ -1081,7 +1323,7 @@ class MainWindow:
         
         self.timeline.add_clip(track_idx, new_clip)
         self._timeline_canvas.select_clip(track_idx, new_clip)
-        self._track_controls.populate_tracks(self.timeline)
+        if self._timeline_canvas: self._timeline_canvas.redraw()
         self._timeline_canvas.redraw()
         
         if self._status:
@@ -1130,7 +1372,7 @@ class MainWindow:
             
             # Update UI
             if self._track_controls:
-                self._track_controls.populate_tracks(self.timeline)
+                if self._timeline_canvas: self._timeline_canvas.redraw()
             if self._timeline_canvas:
                 self._timeline_canvas.redraw()
             
@@ -1257,7 +1499,7 @@ Samples: {len(clip.buffer)}
             self._toolbar_manager.bpm_var.set(120.0)
         
         if self._track_controls:
-            self._track_controls.populate_tracks(self.timeline)
+            if self._timeline_canvas: self._timeline_canvas.redraw()
         
         if self._timeline_canvas:
             self._timeline_canvas.redraw()
@@ -1346,7 +1588,7 @@ Samples: {len(clip.buffer)}
             
             if self._track_controls:
                 print("Calling populate_tracks...")
-                self._track_controls.populate_tracks(self.timeline)
+                if self._timeline_canvas: self._timeline_canvas.redraw()
                 print("populate_tracks completed")
             
             if self._timeline_canvas:
@@ -1651,24 +1893,3 @@ Samples: {len(clip.buffer)}
             except Exception:
                 pass
             self._root = None
-
-    # Legacy compatibility properties for backward compatibility
-    @property
-    def _track_tree(self):
-        """Legacy property for track_tree."""
-        return self._track_controls.track_tree if self._track_controls else None
-    
-    @property
-    def _volume_var(self):
-        """Legacy property for volume_var."""
-        return self._track_controls.volume_var if self._track_controls else None
-    
-    @property
-    def _loop_var(self):
-        """Legacy property for loop_var."""
-        return self._toolbar_manager.loop_var if self._toolbar_manager else None
-    
-    @property
-    def _bpm_var(self):
-        """Legacy property for bpm_var."""
-        return self._toolbar_manager.bpm_var if self._toolbar_manager else None

@@ -6,6 +6,76 @@ except Exception:  # pragma: no cover
     tk = None
 
 
+class TrackContextMenu:
+    """Context menu for track operations (add clip, rename, delete, etc)."""
+    
+    def __init__(self, root, on_add_audio_clip=None, on_rename=None, on_delete=None, 
+                 on_duplicate=None, on_color=None):
+        self.root = root
+        self.on_add_audio_clip = on_add_audio_clip
+        self.on_rename = on_rename
+        self.on_delete = on_delete
+        self.on_duplicate = on_duplicate
+        self.on_color = on_color
+
+    def show(self, event, track_name: str, track_idx: int):
+        """Show the context menu at the given event location.
+        
+        Args:
+            event: Mouse event with position
+            track_name: Name of the clicked track
+            track_idx: Index of the clicked track
+        """
+        if tk is None or self.root is None:
+            return
+            
+        menu = tk.Menu(self.root, tearoff=0, bg="#2d2d2d", fg="#f5f5f5", activebackground="#3b82f6")
+        
+        # Add Audio Clip
+        if self.on_add_audio_clip:
+            menu.add_command(
+                label=f"🎵 Add Audio Clip to '{track_name}'", 
+                command=lambda: self.on_add_audio_clip(track_idx)
+            )
+            menu.add_separator()
+        
+        # Rename Track
+        if self.on_rename:
+            menu.add_command(
+                label=f"✏ Rename '{track_name}'", 
+                command=lambda: self.on_rename(track_idx)
+            )
+        
+        # Change Color
+        if self.on_color:
+            menu.add_command(
+                label=f"🎨 Change Color", 
+                command=lambda: self.on_color(track_idx)
+            )
+        
+        if (self.on_rename or self.on_color) and (self.on_duplicate or self.on_delete):
+            menu.add_separator()
+        
+        # Duplicate Track
+        if self.on_duplicate:
+            menu.add_command(
+                label=f"📋 Duplicate '{track_name}'", 
+                command=lambda: self.on_duplicate(track_idx)
+            )
+        
+        # Delete Track
+        if self.on_delete:
+            menu.add_command(
+                label=f"✂ Delete '{track_name}'", 
+                command=lambda: self.on_delete(track_idx)
+            )
+        
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+
 class ClipContextMenu:
     """Context menu for clip operations (delete, duplicate, properties)."""
     
