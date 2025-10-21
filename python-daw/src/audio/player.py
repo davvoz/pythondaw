@@ -125,9 +125,24 @@ class TimelinePlayer:
             if track_index not in track_clips:
                 track_clips[track_index] = []
             track_clips[track_index].append(clip)
-        
-        # Process each track separately (render clips, apply effects, then pan/mix)
-        for track_index, clips in track_clips.items():
+        # Determine which tracks to process this block:
+        # - all tracks that have clips in this block
+        # - plus any audible tracks from project (to keep FX tails running)
+        tracks_to_process = set(track_clips.keys())
+        if self.project is not None and hasattr(self.project, 'tracks'):
+            try:
+                for idx in range(len(self.project.tracks)):
+                    # honor mute/solo if mixer provided
+                    if self.mixer is not None and hasattr(self.mixer, 'should_play_track'):
+                        if not self.mixer.should_play_track(idx):
+                            continue
+                    tracks_to_process.add(idx)
+            except Exception:
+                pass
+
+        # Process each track separately (render clips if any, apply effects, then pan/mix)
+        for track_index in sorted(tracks_to_process):
+            clips = track_clips.get(track_index, [])
             # Create mono buffer for this track
             track_mono = np.zeros(frames, dtype=np.float32)
             
@@ -162,6 +177,14 @@ class TimelinePlayer:
                         tr = self.project.tracks[int(track_index)]
                         fx_chain = getattr(tr, 'effects', None)
                         if fx_chain and getattr(fx_chain, 'slots', None):
+                            # Ensure effects have the correct sample rate
+                            try:
+                                for slot in fx_chain.slots:
+                                    fx = getattr(slot, 'effect', None)
+                                    if fx is not None and hasattr(fx, 'set_sample_rate'):
+                                        fx.set_sample_rate(self.sample_rate)
+                            except Exception:
+                                pass
                             # Convert to list for effects processing
                             track_list = track_mono.tolist()
                             track_list = fx_chain.process(track_list)

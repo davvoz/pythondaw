@@ -62,9 +62,25 @@ class AudioEngine:
             if track_index not in track_clips:
                 track_clips[track_index] = []
             track_clips[track_index].append(clip)
+
+        # Determina le tracce da processare (per tenere vive le code FX):
+        tracks_to_process = set(track_clips.keys())
+        if project is not None and hasattr(project, 'tracks'):
+            try:
+                for idx in range(len(project.tracks)):
+                    # onora mute/solo se mixer presente
+                    if mixer is not None and hasattr(mixer, 'should_play_track'):
+                        if not mixer.should_play_track(idx):
+                            continue
+                    if solo_tracks is not None and idx not in solo_tracks:
+                        continue
+                    tracks_to_process.add(idx)
+            except Exception:
+                pass
         
         # Renderizza ogni traccia separatamente, applica effetti, poi mixa
-        for track_index, clips in track_clips.items():
+        for track_index in sorted(tracks_to_process):
+            clips = track_clips.get(track_index, [])
             # Crea buffer vuoto per questa traccia
             track_buffer = [0.0] * total_samples
             
@@ -106,6 +122,14 @@ class AudioEngine:
                         tr = project.tracks[int(track_index)]
                         fx_chain = getattr(tr, 'effects', None)
                         if fx_chain and getattr(fx_chain, 'slots', None):
+                            # Aggiorna il sample rate sugli effetti, se supportato
+                            try:
+                                for slot in fx_chain.slots:
+                                    fx = getattr(slot, 'effect', None)
+                                    if fx is not None and hasattr(fx, 'set_sample_rate'):
+                                        fx.set_sample_rate(sample_rate)
+                            except Exception:
+                                pass
                             track_buffer = fx_chain.process(track_buffer)
                 except Exception as e:
                     # Fail-safe: ignore any effect processing errors
