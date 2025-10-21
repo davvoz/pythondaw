@@ -173,6 +173,8 @@ class ProjectSerializer:
             "effects": effects_conf,
             "clips": [self._serialize_clip(clip, track_index, i, embed_audio) 
                      for i, clip in enumerate(track.audio_files)],
+            # Include synthesizer settings for MIDI tracks if present
+            "synth": None if track_type != 'midi' else self._serialize_synth(getattr(track, 'instrument', None)),
         }
     
     def _serialize_clip(self, clip, track_index: int, clip_index: int, 
@@ -238,6 +240,28 @@ class ProjectSerializer:
                 clip_data["notes"] = []
         
         return clip_data
+
+    def _serialize_synth(self, instrument) -> Optional[Dict[str, Any]]:
+        """Serialize Synthesizer parameters, if available."""
+        if instrument is None:
+            return None
+        try:
+            from ..instruments.synthesizer import Synthesizer
+        except Exception:
+            Synthesizer = None
+        if Synthesizer is None or not isinstance(instrument, Synthesizer):
+            return None
+        try:
+            return {
+                "oscillator_type": getattr(instrument, 'oscillator_type', 'sine'),
+                "volume": getattr(instrument, 'volume', 1.0),
+                "attack": getattr(instrument, 'attack', 0.005),
+                "decay": getattr(instrument, 'decay', 0.05),
+                "sustain": getattr(instrument, 'sustain', 0.7),
+                "release": getattr(instrument, 'release', 0.1),
+            }
+        except Exception:
+            return None
     
     def _deserialize_project(self, data: Dict[str, Any]):
         """Deserialize dictionary to Project instance."""
@@ -271,6 +295,19 @@ class ProjectSerializer:
                 track.instrument = Synthesizer()
             except Exception:
                 track.instrument = None
+            # Restore synth parameters if present
+            try:
+                synth_conf = data.get("synth")
+                if synth_conf and track.instrument is not None:
+                    inst = track.instrument
+                    inst.oscillator_type = synth_conf.get("oscillator_type", getattr(inst, 'oscillator_type', 'sine'))
+                    inst.volume = float(synth_conf.get("volume", getattr(inst, 'volume', 1.0)))
+                    inst.attack = float(synth_conf.get("attack", getattr(inst, 'attack', 0.005)))
+                    inst.decay = float(synth_conf.get("decay", getattr(inst, 'decay', 0.05)))
+                    inst.sustain = float(synth_conf.get("sustain", getattr(inst, 'sustain', 0.7)))
+                    inst.release = float(synth_conf.get("release", getattr(inst, 'release', 0.1)))
+            except Exception:
+                pass
         
         # Restore effects chain if present
         try:
