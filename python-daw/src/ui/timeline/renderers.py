@@ -292,8 +292,16 @@ class ClipRenderer:
         )
         
         # Draw waveform
-        self._draw_waveform(canvas, clip, x0, x1, y0, y1)
-        
+        # Draw waveform or MIDI visualization
+        try:
+            from ...midi.clip import MidiClip  # lazy import to avoid circulars
+        except Exception:
+            MidiClip = None  # type: ignore
+
+        if MidiClip is not None and isinstance(clip, MidiClip):
+            self._draw_midi_roll(canvas, clip, x0, x1, y0, y1, track_color)
+        else:
+            self._draw_waveform(canvas, clip, x0, x1, y0, y1)
         # Clip name
         clip_name = getattr(clip, 'name', 'clip')
         canvas.create_text(
@@ -307,7 +315,68 @@ class ClipRenderer:
             self._draw_resize_handles(canvas, x0, x1, y0, y1)
         
         return clip_id
-    
+
+    def _draw_midi_roll(self, canvas, clip, x0: float, x1: float, y0: float, y1: float, color: str):
+        """Draw a minimal piano-roll style visualization inside the clip rectangle."""
+        # background stripes for octaves
+        try:
+            notes = getattr(clip, 'notes', []) or []
+        except Exception:
+            notes = []
+        height = (y1 - y0 - 16)
+        top = y0 + 8
+        # Map MIDI pitch to vertical position within track area (range 36..84)
+        pmin, pmax = 36, 84
+        prange = max(1, pmax - pmin)
+
+        def pitch_y(p):
+            p = max(pmin, min(pmax, int(p)))
+            rel = (p - pmin) / prange
+            return top + height * (1.0 - rel)
+
+        # time to x helper
+        def t_to_x(t):
+            return self.geometry.time_to_x(clip.start_time + t)
+
+        # grid lines for octaves
+        try:
+            for o in range(pmin, pmax + 1, 12):
+                y_line = pitch_y(o)
+                canvas.create_line(x0, y_line, x1, y_line, fill="#0f172a", width=1)
+        except Exception:
+            pass
+
+        # draw each note as a rectangle
+        for n in notes:
+            try:
+                nx0 = max(x0, t_to_x(n.start))
+                nx1 = min(x1, t_to_x(n.start + n.duration))
+                if nx1 <= nx0:
+                    continue
+                ny = pitch_y(n.pitch)
+                nh = max(6, height / 24)
+                vel = max(0.2, min(1.0, (getattr(n, 'velocity', 100) / 127.0)))
+                fill = color
+                # velocity tint (darker for low velocity)
+                try:
+                    fill = self._tint_color(color, vel)
+                except Exception:
+                    pass
+                canvas.create_rectangle(nx0, ny - nh/2, nx1, ny + nh/2, fill=fill, outline="#111827")
+            except Exception:
+                continue
+
+    @staticmethod
+    def _tint_color(hex_color: str, factor: float) -> str:
+        try:
+            hex_color = hex_color.lstrip('#')
+            r, g, b = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+            r = min(255, int(r * factor))
+            g = min(255, int(g * factor))
+            b = min(255, int(b * factor))
+            return f"#{r:02x}{g:02x}{b:02x}"
+        except Exception:
+            return hex_color
     def _draw_waveform(self, canvas, clip, x0: float, x1: float, y0: float, y1: float):
         """Draw waveform visualization in clip."""
         try:

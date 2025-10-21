@@ -68,29 +68,47 @@ class ClipboardService:
         if not selected_clips:
             return 0
         
+        from src.midi.clip import MidiClip
+        
         # Store clip data in clipboard
         self.clipboard = []
         
         for track_idx, clip in selected_clips:
+            # Check if it's a MIDI clip
+            is_midi = isinstance(clip, MidiClip)
+            
             clip_data = {
                 'track_idx': track_idx,
                 'name': clip.name,
-                'buffer': clip.buffer,
                 'sample_rate': clip.sample_rate,
                 'start_time': clip.start_time,
-                'duration': clip.duration,
                 'color': clip.color,
-                'file_path': getattr(clip, 'file_path', None),
-                # Editing properties
-                'start_offset': getattr(clip, 'start_offset', 0.0),
-                'end_offset': getattr(clip, 'end_offset', 0.0),
-                'fade_in': getattr(clip, 'fade_in', 0.0),
-                'fade_in_shape': getattr(clip, 'fade_in_shape', 'linear'),
-                'fade_out': getattr(clip, 'fade_out', 0.0),
-                'fade_out_shape': getattr(clip, 'fade_out_shape', 'linear'),
-                'pitch_semitones': getattr(clip, 'pitch_semitones', 0.0),
-                'volume': getattr(clip, 'volume', 1.0),
+                'clip_type': 'midi' if is_midi else 'audio',
             }
+            
+            if is_midi:
+                # MIDI-specific properties
+                clip_data['notes'] = [
+                    {'pitch': n.pitch, 'start': n.start, 'duration': n.duration, 'velocity': n.velocity}
+                    for n in clip.notes
+                ]
+                clip_data['duration'] = getattr(clip, 'duration', None)
+                clip_data['instrument'] = getattr(clip, 'instrument', None)
+            else:
+                # Audio-specific properties
+                clip_data['buffer'] = clip.buffer
+                clip_data['duration'] = clip.duration
+                clip_data['file_path'] = getattr(clip, 'file_path', None)
+                # Editing properties
+                clip_data['start_offset'] = getattr(clip, 'start_offset', 0.0)
+                clip_data['end_offset'] = getattr(clip, 'end_offset', 0.0)
+                clip_data['fade_in'] = getattr(clip, 'fade_in', 0.0)
+                clip_data['fade_in_shape'] = getattr(clip, 'fade_in_shape', 'linear')
+                clip_data['fade_out'] = getattr(clip, 'fade_out', 0.0)
+                clip_data['fade_out_shape'] = getattr(clip, 'fade_out_shape', 'linear')
+                clip_data['pitch_semitones'] = getattr(clip, 'pitch_semitones', 0.0)
+                clip_data['volume'] = getattr(clip, 'volume', 1.0)
+            
             self.clipboard.append(clip_data)
         
         # Show paste cursor at current playback position
@@ -131,6 +149,8 @@ class ClipboardService:
             return []
         
         from src.audio.clip import AudioClip
+        from src.midi.clip import MidiClip
+        from src.midi.note import MidiNote
         
         # Determine paste position
         if at_time is None:
@@ -145,26 +165,50 @@ class ClipboardService:
         for clip_data in self.clipboard:
             # Create new clip with offset time
             new_start_time = clip_data['start_time'] + time_offset
+            clip_type = clip_data.get('clip_type', 'audio')
             
-            new_clip = AudioClip(
-                clip_data['name'] + " (paste)",
-                clip_data['buffer'],
-                clip_data['sample_rate'],
-                new_start_time,
-                duration=clip_data['duration'],
-                color=clip_data['color'],
-                file_path=clip_data['file_path'],
-            )
-            
-            # Restore editing properties
-            new_clip.start_offset = clip_data['start_offset']
-            new_clip.end_offset = clip_data['end_offset']
-            new_clip.fade_in = clip_data['fade_in']
-            new_clip.fade_in_shape = clip_data['fade_in_shape']
-            new_clip.fade_out = clip_data['fade_out']
-            new_clip.fade_out_shape = clip_data['fade_out_shape']
-            new_clip.pitch_semitones = clip_data['pitch_semitones']
-            new_clip.volume = clip_data['volume']
+            if clip_type == 'midi':
+                # Create MIDI clip
+                notes = [
+                    MidiNote(
+                        pitch=n['pitch'],
+                        start=n['start'],
+                        duration=n['duration'],
+                        velocity=n['velocity']
+                    )
+                    for n in clip_data['notes']
+                ]
+                
+                new_clip = MidiClip(
+                    name=clip_data['name'] + " (paste)",
+                    notes=notes,
+                    start_time=new_start_time,
+                    duration=clip_data['duration'],
+                    color=clip_data['color'],
+                    instrument=clip_data.get('instrument'),
+                    sample_rate=clip_data['sample_rate']
+                )
+            else:
+                # Create Audio clip
+                new_clip = AudioClip(
+                    clip_data['name'] + " (paste)",
+                    clip_data['buffer'],
+                    clip_data['sample_rate'],
+                    new_start_time,
+                    duration=clip_data['duration'],
+                    color=clip_data['color'],
+                    file_path=clip_data.get('file_path'),
+                )
+                
+                # Restore editing properties
+                new_clip.start_offset = clip_data['start_offset']
+                new_clip.end_offset = clip_data['end_offset']
+                new_clip.fade_in = clip_data['fade_in']
+                new_clip.fade_in_shape = clip_data['fade_in_shape']
+                new_clip.fade_out = clip_data['fade_out']
+                new_clip.fade_out_shape = clip_data['fade_out_shape']
+                new_clip.pitch_semitones = clip_data['pitch_semitones']
+                new_clip.volume = clip_data['volume']
             
             # Add to timeline
             track_idx = clip_data['track_idx']

@@ -165,43 +165,65 @@ class ProjectSerializer:
     
     def _serialize_clip(self, clip, track_index: int, clip_index: int, 
                        embed_audio: bool) -> Dict[str, Any]:
-        """Serialize AudioClip instance to dictionary."""
+        """Serialize a clip (AudioClip or MidiClip) to dictionary."""
+        # Detect MIDI clip
+        is_midi = False
+        try:
+            from ..midi.clip import MidiClip  # type: ignore
+            is_midi = isinstance(clip, MidiClip)
+        except Exception:
+            is_midi = False
+
         clip_data = {
             "name": clip.name,
             "start_time": clip.start_time,
             "duration": clip.duration,
-            "sample_rate": clip.sample_rate,
+            "sample_rate": getattr(clip, 'sample_rate', 44100),
             "color": clip.color,
             "selected": clip.selected,
-            "start_offset": clip.start_offset,
-            "end_offset": clip.end_offset,
-            "fade_in": clip.fade_in,
-            "fade_in_shape": clip.fade_in_shape,
-            "fade_out": clip.fade_out,
-            "fade_out_shape": clip.fade_out_shape,
-            "pitch_semitones": clip.pitch_semitones,
-            "volume": clip.volume,
+            "type": "midi" if is_midi else "audio",
         }
-        
-        # Handle audio data
-        if embed_audio:
-            # Embed audio data directly in JSON (base64 encoded)
-            clip_data["audio_embedded"] = True
-            clip_data["audio_data"] = self._encode_audio_buffer(clip.buffer)
+        if not is_midi:
+            # AudioClip specific props
+            clip_data.update({
+                "start_offset": getattr(clip, 'start_offset', 0.0),
+                "end_offset": getattr(clip, 'end_offset', 0.0),
+                "fade_in": getattr(clip, 'fade_in', 0.0),
+                "fade_in_shape": getattr(clip, 'fade_in_shape', 'linear'),
+                "fade_out": getattr(clip, 'fade_out', 0.0),
+                "fade_out_shape": getattr(clip, 'fade_out_shape', 'linear'),
+                "pitch_semitones": getattr(clip, 'pitch_semitones', 0.0),
+                "volume": getattr(clip, 'volume', 1.0),
+            })
+            # Handle audio data
+            if embed_audio:
+                # Embed audio data directly in JSON (base64 encoded)
+                clip_data["audio_embedded"] = True
+                clip_data["audio_data"] = self._encode_audio_buffer(clip.buffer)
+            else:
+                # Save audio to separate file
+                audio_filename = f"track{track_index}_clip{clip_index}_{clip.name}.wav"
+                audio_path = self.audio_dir / audio_filename
+                
+                self._save_audio_file(
+                    audio_path,
+                    clip.buffer,
+                    clip.sample_rate
+                )
+                
+                clip_data["audio_embedded"] = False
+                clip_data["audio_file"] = audio_filename
+                clip_data["original_file_path"] = clip.file_path
         else:
-            # Save audio to separate file
-            audio_filename = f"track{track_index}_clip{clip_index}_{clip.name}.wav"
-            audio_path = self.audio_dir / audio_filename
-            
-            self._save_audio_file(
-                audio_path,
-                clip.buffer,
-                clip.sample_rate
-            )
-            
-            clip_data["audio_embedded"] = False
-            clip_data["audio_file"] = audio_filename
-            clip_data["original_file_path"] = clip.file_path
+            # MIDI clip specific props
+            try:
+                notes = getattr(clip, 'notes', []) or []
+                clip_data["notes"] = [
+                    {"pitch": int(n.pitch), "start": float(n.start), "duration": float(n.duration), "velocity": int(getattr(n, 'velocity', 100))}
+                    for n in notes
+                ]
+            except Exception:
+                clip_data["notes"] = []
         
         return clip_data
     
@@ -268,28 +290,57 @@ class ProjectSerializer:
         return track
     
     def _deserialize_clip(self, data: Dict[str, Any]):
-        """Deserialize dictionary to AudioClip instance."""
+        """Deserialize dictionary to a clip instance (AudioClip or MidiClip)."""
+        clip_type = data.get("type", "audio")
+        if clip_type == 'midi':
+            try:
+                from ..midi.clip import MidiClip
+                from ..midi.note import MidiNote
+            except Exception:
+                MidiClip = None
+                MidiNote = None
+            if MidiClip is None:
+                # Fallback to empty AudioClip of silence if MIDI not available
+                AudioClip = _import_audioclip()
+                clip = AudioClip(
+                    name=data["name"], buffer=[0.0] * int(0.5 * data.get("sample_rate", 44100)),
+                    sample_rate=data.get("sample_rate", 44100), start_time=data["start_time"],
+                    duration=data.get("duration", 0.5), color=data.get("color")
+                )
+                clip.selected = data.get("selected", False)
+                return clip
+            # Rebuild notes
+            notes = []
+            for nd in data.get("notes", []):
+                try:
+                    notes.append(MidiNote(int(nd.get("pitch", 60)), float(nd.get("start", 0.0)), float(nd.get("duration", 0.25)), int(nd.get("velocity", 100))))
+                except Exception:
+                    continue
+            clip = MidiClip(
+                name=data["name"], notes=notes, start_time=data["start_time"],
+                duration=data.get("duration"), color=data.get("color"),
+                instrument=None, sample_rate=data.get("sample_rate", 44100)
+            )
+            clip.selected = data.get("selected", False)
+            return clip
+
+        # Audio clip path
         AudioClip = _import_audioclip()
-        
         # Load audio buffer
-        if data["audio_embedded"]:
-            buffer = self._decode_audio_buffer(data["audio_data"])
+        if data.get("audio_embedded", False):
+            buffer = self._decode_audio_buffer(data.get("audio_data", ""))
         else:
-            audio_path = self.audio_dir / data["audio_file"]
-            buffer = self._load_audio_file(audio_path, data["sample_rate"])
-        
-        # Create clip
+            audio_path = self.audio_dir / data.get("audio_file", "")
+            buffer = self._load_audio_file(audio_path, data.get("sample_rate", 44100))
         clip = AudioClip(
             name=data["name"],
             buffer=buffer,
-            sample_rate=data["sample_rate"],
+            sample_rate=data.get("sample_rate", 44100),
             start_time=data["start_time"],
             duration=data.get("duration"),
             color=data.get("color"),
             file_path=data.get("original_file_path")
         )
-        
-        # Restore properties
         clip.selected = data.get("selected", False)
         clip.start_offset = data.get("start_offset", 0.0)
         clip.end_offset = data.get("end_offset", 0.0)
@@ -299,7 +350,6 @@ class ProjectSerializer:
         clip.fade_out_shape = data.get("fade_out_shape", "linear")
         clip.pitch_semitones = data.get("pitch_semitones", 0.0)
         clip.volume = data.get("volume", 1.0)
-        
         return clip
     
     def _encode_audio_buffer(self, buffer: List[float]) -> str:

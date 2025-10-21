@@ -10,15 +10,17 @@ class TrackContextMenu:
     """Context menu for track operations (add clip, rename, delete, etc)."""
     
     def __init__(self, root, on_add_audio_clip=None, on_rename=None, on_delete=None, 
-                 on_duplicate=None, on_color=None):
+                 on_duplicate=None, on_color=None, on_add_midi_demo=None, on_edit_synth=None):
         self.root = root
         self.on_add_audio_clip = on_add_audio_clip
+        self.on_add_midi_demo = on_add_midi_demo
+        self.on_edit_synth = on_edit_synth
         self.on_rename = on_rename
         self.on_delete = on_delete
         self.on_duplicate = on_duplicate
         self.on_color = on_color
 
-    def show(self, event, track_name: str, track_idx: int):
+    def show(self, event, track_name: str, track_idx: int, track_type: str = "audio"):
         """Show the context menu at the given event location.
         
         Args:
@@ -31,13 +33,27 @@ class TrackContextMenu:
             
         menu = tk.Menu(self.root, tearoff=0, bg="#2d2d2d", fg="#f5f5f5", activebackground="#3b82f6")
         
-        # Add Audio Clip
-        if self.on_add_audio_clip:
-            menu.add_command(
-                label=f"🎵 Add Audio Clip to '{track_name}'", 
-                command=lambda: self.on_add_audio_clip(track_idx)
-            )
-            menu.add_separator()
+        # Add Clip items
+        if track_type.lower() == 'midi':
+            if self.on_add_midi_demo:
+                menu.add_command(
+                    label=f"➕ Add MIDI Clip to '{track_name}'",
+                    command=lambda: self.on_add_midi_demo(track_idx)
+                )
+            if self.on_edit_synth:
+                menu.add_command(
+                    label=f"🎛️ Edit Synthesizer",
+                    command=lambda: self.on_edit_synth(track_idx)
+                )
+            if self.on_add_midi_demo or self.on_edit_synth:
+                menu.add_separator()
+        else:
+            if self.on_add_audio_clip:
+                menu.add_command(
+                    label=f"🎵 Add Audio Clip to '{track_name}'", 
+                    command=lambda: self.on_add_audio_clip(track_idx)
+                )
+                menu.add_separator()
         
         # Rename Track
         if self.on_rename:

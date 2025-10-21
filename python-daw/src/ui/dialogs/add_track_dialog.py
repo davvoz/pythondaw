@@ -18,7 +18,7 @@ class AddTrackDialog:
             "#3b82f6", "#10b981", "#f59e0b", "#ef4444",
             "#8b5cf6", "#ec4899", "#06b6d4", "#84cc16"
         ]
-        self.result = None  # (name, color) or None if cancelled
+        self.result = None  # (name, color, type) or None if cancelled
 
     def show(self):
         """Show the dialog and return (name, color) tuple or None if cancelled."""
@@ -50,6 +50,14 @@ class AddTrackDialog:
         name_entry.pack(fill="x", pady=(0, 16))
         name_entry.focus_set()
         name_entry.select_range(0, tk.END)
+
+        # Track type
+        ttk.Label(content, text="Track Type:", style="Sidebar.TLabel").pack(anchor="w", pady=(0, 4))
+        type_var = tk.StringVar(value="Audio")
+        type_frame = ttk.Frame(content, style="Sidebar.TFrame")
+        type_frame.pack(fill="x", pady=(0, 12))
+        for t in ("Audio", "MIDI"):
+            ttk.Radiobutton(type_frame, text=t, value=t, variable=type_var).pack(side="left", padx=6)
 
         # Track color
         ttk.Label(content, text="Track Color:", style="Sidebar.TLabel").pack(anchor="w", pady=(0, 8))
@@ -106,7 +114,7 @@ class AddTrackDialog:
             name = (name_var.get() or "").strip()
             if not name:
                 name = self.suggested_name
-            self.result = (name, selected_color.get())
+            self.result = (name, selected_color.get(), type_var.get())
             dialog.destroy()
 
         def on_cancel():

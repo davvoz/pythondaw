@@ -95,7 +95,9 @@ class MainWindow:
             on_rename=self._rename_track,
             on_delete=self._delete_track,
             on_duplicate=self._duplicate_track,
-            on_color=self._change_track_color
+            on_color=self._change_track_color,
+            on_add_midi_demo=self._add_midi_demo_clip_to_track,
+            on_edit_synth=self._edit_track_synth,
         )
 
         # Setup UI components
@@ -871,14 +873,26 @@ class MainWindow:
         if not result:
             return
         
-        track_name, color = result
-        # Add to mixer
+        track_name, color, track_type = result
+        # Add to mixer with type info
         self.mixer.add_track(name=track_name, volume=1.0, pan=0.0, color=color)
-        
+        # annotate last added track with type
+        try:
+            self.mixer.tracks[-1]["type"] = track_type.lower()
+        except Exception:
+            pass
+
         # Also add to project.tracks so it persists in save/load
         from ..core.track import Track
         track = Track(name=track_name)
         track.set_volume(1.0)
+        # attach a basic instrument if MIDI
+        if track_type.lower() == 'midi':
+            try:
+                from ..instruments.synthesizer import Synthesizer
+                track.instrument = Synthesizer()
+            except Exception:
+                track.instrument = None
         self.project.create_track(track)
         
         if self._timeline_canvas: self._timeline_canvas.redraw()
@@ -947,6 +961,97 @@ class MainWindow:
             if self._status:
                 self._status.set(f"⚠ Error loading audio: {e}")
             print(f"Error loading audio: {e}")
+
+    def _add_midi_demo_clip_to_track(self, track_idx):
+        """Add an empty MIDI clip to a MIDI track."""
+        if self.timeline is None or self.mixer is None:
+            return
+        try:
+            # Validate track type
+            track_type = (self.mixer.tracks[track_idx].get("type") or "audio").lower()
+            if track_type != 'midi':
+                if self._status:
+                    self._status.set("⚠ Selected track is not a MIDI track")
+                return
+            from src.midi.clip import MidiClip
+            # pick instrument from project track if present
+            instrument = None
+            if self.project and hasattr(self.project, 'tracks') and track_idx < len(self.project.tracks):
+                instrument = getattr(self.project.tracks[track_idx], 'instrument', None)
+            if instrument is None:
+                try:
+                    from src.instruments.synthesizer import Synthesizer
+                    instrument = Synthesizer()
+                except Exception:
+                    instrument = None
+
+            # Create empty clip at current time with 4 seconds default length
+            cur = 0.0
+            try:
+                cur = float(getattr(self.player, "_current_time", 0.0))
+            except Exception:
+                pass
+            
+            # Empty notes list - user will add notes via Piano Roll
+            notes = []
+            mclip = MidiClip(name="MIDI Clip", notes=notes, start_time=cur, duration=4.0, color="#22c55e", instrument=instrument)
+            
+            self.timeline.add_clip(track_idx, mclip)
+            if self._timeline_canvas:
+                self._timeline_canvas.redraw()
+            if self._status:
+                tn = self.mixer.tracks[track_idx].get("name", f"Track {track_idx+1}")
+                self._status.set(f"✓ Added empty MIDI clip to '{tn}' - Double-click to edit notes")
+        except Exception as e:
+            print(f"Error adding MIDI clip: {e}")
+    
+    def _edit_track_synth(self, track_idx):
+        """Open synthesizer editor for a MIDI track."""
+        if self.project is None or self.mixer is None:
+            return
+        
+        try:
+            # Validate track type
+            track_type = (self.mixer.tracks[track_idx].get("type") or "audio").lower()
+            if track_type != 'midi':
+                if self._status:
+                    self._status.set("⚠ Selected track is not a MIDI track")
+                return
+            
+            # Get track and synthesizer
+            if track_idx >= len(self.project.tracks):
+                if self._status:
+                    self._status.set("⚠ Track not found in project")
+                return
+            
+            track = self.project.tracks[track_idx]
+            synth = getattr(track, 'instrument', None)
+            
+            if synth is None:
+                # Create a new synthesizer if none exists
+                from src.instruments.synthesizer import Synthesizer
+                synth = Synthesizer()
+                track.instrument = synth
+                print(f"✓ Created new synthesizer for track {track_idx + 1}")
+            
+            # Open synth editor
+            from .synth_editor import show_synth_editor
+            track_name = self.mixer.tracks[track_idx].get("name", f"Track {track_idx + 1}")
+            
+            def on_synth_change(s):
+                """Called when synth parameters change."""
+                # No need to redraw timeline, but could update status
+                if self._status:
+                    self._status.set(f"🎛️ Synth updated: {track_name}")
+            
+            show_synth_editor(self._root, synth, track_name, on_apply=on_synth_change)
+            
+        except Exception as e:
+            if self._status:
+                self._status.set(f"⚠ Error opening synth editor: {e}")
+            print(f"Error opening synth editor: {e}")
+            import traceback
+            traceback.print_exc()
     
     def _rename_track(self, track_idx):
         """Rename a track."""
@@ -1106,8 +1211,10 @@ class MainWindow:
         
         # Show track context menu
         if self._track_menu:
-            track_name = self.mixer.tracks[track_idx].get("name", f"Track {track_idx+1}")
-            self._track_menu.show(event, track_name, track_idx)
+            track_obj = self.mixer.tracks[track_idx]
+            track_name = track_obj.get("name", f"Track {track_idx+1}")
+            track_type = track_obj.get("type", "audio")
+            self._track_menu.show(event, track_name, track_idx, track_type=track_type)
     
     def _on_timeline_right_click(self, event):
         """Handle right-click context menu on timeline."""
@@ -1122,6 +1229,12 @@ class MainWindow:
         if clicked_clip:
             # Right-click on clip - show clip menu
             track_idx, clip = clicked_clip
+            is_midi = False
+            try:
+                from src.midi.clip import MidiClip
+                is_midi = isinstance(clip, MidiClip)
+            except Exception:
+                is_midi = False
             
             # Check if clicked clip is already in selection
             selected_clips = self._timeline_canvas.get_selected_clips()
@@ -1143,6 +1256,14 @@ class MainWindow:
             # Delegate menu rendering to ClipContextMenu
             if self._clip_menu:
                 self._clip_menu.show(event, clip_name, multi_selection=multi_selection)
+                # Add Piano Roll option for MIDI (separate popup for now)
+                if is_midi and tk is not None:
+                    menu = tk.Menu(self._root, tearoff=0, bg="#2d2d2d", fg="#f5f5f5", activebackground="#3b82f6")
+                    menu.add_command(label="🎹 Open Piano Roll", command=lambda: self._open_piano_roll_editor(clip))
+                    try:
+                        menu.tk_popup(event.x_root+10, event.y_root+10)
+                    finally:
+                        menu.grab_release()
         else:
             # Right-click on empty timeline - show paste menu
             if y > self._timeline_canvas.ruler_height:
@@ -1177,12 +1298,19 @@ class MainWindow:
             foreground="#888888"
         )
         
-        # Add Audio Clip option (if on a valid track)
-        if track_idx is not None and track_name:
-            menu.add_command(
-                label=f"🎵 Add Audio Clip to '{track_name}'",
-                command=lambda: self._add_audio_clip_to_track(track_idx)
-            )
+        # Add Clip option (MIDI or Audio depending on track type)
+        if track_idx is not None and track_name and self.mixer:
+            track_type = (self.mixer.tracks[track_idx].get("type") or "audio").lower()
+            if track_type == 'midi':
+                menu.add_command(
+                    label=f"🎹 Add MIDI Clip to '{track_name}'",
+                    command=lambda: self._add_midi_demo_clip_to_track(track_idx)
+                )
+            else:
+                menu.add_command(
+                    label=f"🎵 Add Audio Clip to '{track_name}'",
+                    command=lambda: self._add_audio_clip_to_track(track_idx)
+                )
         
         menu.add_separator()
         
@@ -1486,7 +1614,26 @@ class MainWindow:
             # Fallback: simple message box with info
             if messagebox is None:
                 return
-            props = f"""Clip Properties
+            
+            # Check if it's a MIDI clip
+            try:
+                from src.midi.clip import MidiClip
+                is_midi = isinstance(clip, MidiClip)
+            except:
+                is_midi = False
+            
+            if is_midi:
+                props = f"""MIDI Clip Properties
+
+Name: {clip.name}
+Start Time: {clip.start_time:.3f} s
+End Time: {clip.end_time:.3f} s
+Duration: {clip.length_seconds:.3f} s
+Sample Rate: {clip.sample_rate} Hz
+Notes: {len(getattr(clip, 'notes', []))}
+"""
+            else:
+                props = f"""Clip Properties
 
 Name: {clip.name}
 Start Time: {clip.start_time:.3f} s
@@ -1495,8 +1642,8 @@ Duration: {clip.length_seconds:.3f} s
 Sample Rate: {clip.sample_rate} Hz
 Samples: {len(clip.buffer)}
 """
-            if clip.file_path:
-                props += f"\nSource: {clip.file_path}"
+                if hasattr(clip, 'file_path') and clip.file_path:
+                    props += f"\nSource: {clip.file_path}"
             messagebox.showinfo("Clip Properties", props)
             return
 
@@ -1506,6 +1653,30 @@ Samples: {len(clip.buffer)}
                 self._timeline_canvas.redraw()
 
         show_clip_inspector(self._root, clip, on_apply=on_apply)
+
+    def _open_piano_roll_editor(self, clip):
+        """Open the Piano Roll editor for a MIDI clip and refresh on apply."""
+        try:
+            # Lazy import to avoid hard dependency when MIDI is not used
+            from .piano_roll import PianoRollEditor
+        except Exception:
+            PianoRollEditor = None
+        if tk is None or PianoRollEditor is None or self._root is None:
+            return
+
+        def _on_apply(_clip):
+            # Redraw the timeline to reflect note edits and potential length changes
+            try:
+                if self._timeline_canvas:
+                    self._timeline_canvas.redraw()
+            except Exception:
+                pass
+
+        try:
+            editor = PianoRollEditor(self._root, clip, on_apply=_on_apply)
+            editor.show()
+        except Exception as e:
+            print(f"Failed to open Piano Roll: {e}")
 
     # Project management methods
     def _new_project(self):
@@ -1595,7 +1766,17 @@ Samples: {len(clip.buffer)}
                     # Debug: print what we're loading
                     print(f"  Track {track_idx}: {len(track.audio_files)} clip(s)")
                     for clip in track.audio_files:
-                        print(f"    - {clip.name}: {clip.start_time}s, buffer={len(clip.buffer)} samples")
+                        # Check if it's a MIDI clip or Audio clip for debug message
+                        try:
+                            from src.midi.clip import MidiClip
+                            is_midi = isinstance(clip, MidiClip)
+                        except:
+                            is_midi = False
+                        
+                        if is_midi:
+                            print(f"    - {clip.name}: {clip.start_time}s, MIDI clip with {len(getattr(clip, 'notes', []))} notes")
+                        else:
+                            print(f"    - {clip.name}: {clip.start_time}s, buffer={len(clip.buffer)} samples")
                         # Add clip to timeline using proper API
                         self.timeline.add_clip(track_idx, clip)
             

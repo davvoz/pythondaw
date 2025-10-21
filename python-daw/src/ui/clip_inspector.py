@@ -9,9 +9,36 @@ except Exception:  # pragma: no cover
 
 from typing import Callable, Optional
 from src.audio.clip import AudioClip
+from src.midi.clip import MidiClip
 from src.ui.waveform_editor import WaveformEditor
 
 FADE_SHAPES = ["linear", "exp", "log", "s-curve"]
+
+
+def show_midi_clip_info(parent, midi_clip, on_apply: Optional[Callable] = None):
+    """Open Piano Roll editor directly for MIDI clip.
+    
+    Parameters:
+        parent: Tk parent window
+        midi_clip: MidiClip instance
+        on_apply: optional callback invoked when changes are made
+    """
+    if tk is None or ttk is None or parent is None or midi_clip is None:
+        return
+    
+    try:
+        from src.ui.piano_roll import PianoRollEditor
+        
+        def on_piano_apply(clip):
+            if callable(on_apply):
+                on_apply(clip)
+        
+        editor = PianoRollEditor(parent, midi_clip, on_apply=on_piano_apply)
+        editor.show()
+    except Exception as e:
+        print(f"Error opening Piano Roll: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 def show_clip_inspector(parent, clip: AudioClip, on_apply: Optional[Callable[[AudioClip], None]] = None):
@@ -23,6 +50,12 @@ def show_clip_inspector(parent, clip: AudioClip, on_apply: Optional[Callable[[Au
         on_apply: optional callback invoked when properties change (for live updates)
     """
     if tk is None or ttk is None or parent is None or clip is None:
+        return
+    
+    # Check if this is a MIDI clip - if so, show different editor
+    if isinstance(clip, MidiClip):
+        # For MIDI clips, just show a simple message and open piano roll
+        show_midi_clip_info(parent, clip, on_apply)
         return
 
     win = tk.Toplevel(parent)
@@ -329,13 +362,19 @@ def show_clip_inspector(parent, clip: AudioClip, on_apply: Optional[Callable[[Au
     def on_change_with_info(*args):
         original_on_change(*args)
         update_info()
-    on_change = on_change_with_info
     
-    # Update traces to use new on_change
+    # Re-assign traces with the new on_change function
     for var in [volume_var, start_var, end_var, fade_in_var, fade_in_shape_var, 
                 fade_out_var, fade_out_shape_var, pitch_var]:
-        var.trace_remove('write', var.trace_info()[0][1] if var.trace_info() else None)
-        var.trace_add('write', on_change)
+        # Remove old traces
+        traces = var.trace_info()
+        for trace in traces:
+            try:
+                var.trace_remove('write', trace[1])
+            except Exception:
+                pass
+        # Add new trace
+        var.trace_add('write', on_change_with_info)
     
     # Button frame
     button_frame = ttk.Frame(frm)
