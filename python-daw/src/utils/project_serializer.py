@@ -346,16 +346,6 @@ class ProjectSerializer:
             clip = self._deserialize_clip(clip_data)
             track.add_audio(clip)
         
-        # For MIDI tracks, assign the track's instrument to all MIDI clips
-        if track.type == "midi" and track.instrument is not None:
-            try:
-                from ..midi.clip import MidiClip
-                for clip in track.audio_files:
-                    if isinstance(clip, MidiClip):
-                        clip.instrument = track.instrument
-            except Exception:
-                pass
-        
         return track
     
     def _deserialize_clip(self, data: Dict[str, Any]):

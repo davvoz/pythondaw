@@ -982,9 +982,6 @@ class MainWindow:
                 try:
                     from src.instruments.synthesizer import Synthesizer
                     instrument = Synthesizer()
-                    # Assign the new synthesizer to the track so all clips share it
-                    if self.project and hasattr(self.project, 'tracks') and track_idx < len(self.project.tracks):
-                        self.project.tracks[track_idx].instrument = instrument
                 except Exception:
                     instrument = None
 
@@ -1402,16 +1399,6 @@ class MainWindow:
         pasted_clips = self._timeline_canvas.paste_clips()
         
         if pasted_clips:
-            # Fix instrument references for MIDI clips to use track's instrument
-            from src.midi.clip import MidiClip
-            for track_idx, clip in pasted_clips:
-                if isinstance(clip, MidiClip):
-                    # Get the track and assign its instrument to the clip
-                    if self.timeline and track_idx < len(self.timeline.tracks):
-                        track = self.timeline.tracks[track_idx]
-                        if track.type == 'midi' and hasattr(track, 'instrument') and track.instrument:
-                            clip.instrument = track.instrument
-            
             if self._timeline_canvas: self._timeline_canvas.redraw()
             if self._status:
                 self._status.set(f"📌 Pasted {len(pasted_clips)} clip(s)")
