@@ -1799,12 +1799,15 @@ Samples: {len(clip.buffer)}
                 # Add loaded tracks (from project.tracks which are Track objects)
                 for idx, track in enumerate(self.project.tracks):
                     track_name = getattr(track, 'name', None) or f"Track {idx + 1}"
-                    print(f"  Adding mixer track {idx}: '{track_name}' (volume={track.volume})")
+                    track_type = getattr(track, 'type', 'audio')
+                    print(f"  Adding mixer track {idx}: '{track_name}' (volume={track.volume}, type={track_type})")
                     self.mixer.add_track(
                         name=track_name,
                         volume=track.volume,
                         pan=0.0
                     )
+                    # Set track type in mixer
+                    self.mixer.tracks[-1]["type"] = track_type
                 
                 print(f"Mixer now has {self.mixer.get_track_count()} tracks")
             

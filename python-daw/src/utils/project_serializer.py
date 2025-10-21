@@ -153,11 +153,23 @@ class ProjectSerializer:
                 effects_conf = fx_chain.to_config()
         except Exception:
             effects_conf = []
+        
+        # Determine track type from clips (if any MIDI clip, it's a MIDI track)
+        track_type = "audio"
+        try:
+            from ..midi.clip import MidiClip
+            for clip in track.audio_files:
+                if isinstance(clip, MidiClip):
+                    track_type = "midi"
+                    break
+        except Exception:
+            pass
 
         return {
             "index": track_index,
             "name": getattr(track, 'name', f"Track {track_index + 1}"),
             "volume": track.volume,
+            "type": track_type,
             "effects": effects_conf,
             "clips": [self._serialize_clip(clip, track_index, i, embed_audio) 
                      for i, clip in enumerate(track.audio_files)],
@@ -250,6 +262,16 @@ class ProjectSerializer:
         
         track = Track(name=data.get("name"))
         track.volume = data["volume"]
+        track.type = data.get("type", "audio")  # Load track type
+        
+        # Create instrument for MIDI tracks
+        if track.type == "midi":
+            try:
+                from ..instruments.synthesizer import Synthesizer
+                track.instrument = Synthesizer()
+            except Exception:
+                track.instrument = None
+        
         # Restore effects chain if present
         try:
             effects_conf = data.get("effects")

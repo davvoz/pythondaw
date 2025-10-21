@@ -11,6 +11,8 @@ class Track:
         self.audio_files = []
         self.volume = 1.0
         self.name = name  # Optional track name
+        self.type = "audio"  # Track type: "audio" or "midi"
+        self.instrument = None  # For MIDI tracks: Synthesizer instance
         # Per-track effects chain (optional)
         self.effects = None
         try:
