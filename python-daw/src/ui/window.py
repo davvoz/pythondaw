@@ -1560,38 +1560,73 @@ class MainWindow:
             print(f"Error duplicating loop: {e}")
 
     def _clone_clip(self, clip, new_start_time: float, name=None):
-        """Create a new AudioClip copying all user-editable properties.
+        """Create a new clip (Audio or MIDI) copying all user-editable properties.
         
         Args:
-            clip: Source AudioClip to clone
+            clip: Source clip to clone (AudioClip or MidiClip)
             new_start_time: Start time for the new clip
             name: Optional name override (defaults to source clip name)
             
         Returns:
-            New AudioClip with all properties copied
+            New clip instance with all properties copied
         """
+        # Try to detect MIDI vs Audio at runtime to avoid hard imports up-top
+        try:
+            from src.midi.clip import MidiClip
+            from src.midi.note import MidiNote
+            is_midi = isinstance(clip, MidiClip)
+        except Exception:
+            MidiClip = None  # type: ignore
+            MidiNote = None  # type: ignore
+            is_midi = False
+
+        if is_midi:
+            # Deep copy notes; note times are clip-local, so keep as-is
+            try:
+                notes = [
+                    MidiNote(pitch=n.pitch, start=n.start, duration=n.duration, velocity=getattr(n, 'velocity', 100))
+                    for n in getattr(clip, 'notes', [])
+                ] if MidiNote is not None else []
+            except Exception:
+                notes = []
+
+            new_clip = MidiClip(
+                name=name or clip.name,
+                notes=notes,
+                start_time=new_start_time,
+                duration=getattr(clip, 'duration', None),
+                color=getattr(clip, 'color', None),
+                instrument=getattr(clip, 'instrument', None),
+                sample_rate=getattr(clip, 'sample_rate', 44100),
+            )
+            return new_clip
+
+        # Fallback: treat as AudioClip
         from src.audio.clip import AudioClip
-        
+
         new_clip = AudioClip(
-            name or clip.name,
-            clip.buffer,
-            clip.sample_rate,
+            name or getattr(clip, 'name', 'clip'),
+            getattr(clip, 'buffer', []),
+            getattr(clip, 'sample_rate', 44100),
             new_start_time,
-            duration=clip.duration,
-            color=clip.color,
-            file_path=clip.file_path,
+            duration=getattr(clip, 'duration', None),
+            color=getattr(clip, 'color', None),
+            file_path=getattr(clip, 'file_path', None),
         )
-        
-        # Copy editing properties (trim, fades, pitch)
-        new_clip.start_offset = getattr(clip, 'start_offset', 0.0)
-        new_clip.end_offset = getattr(clip, 'end_offset', 0.0)
-        new_clip.fade_in = getattr(clip, 'fade_in', 0.0)
-        new_clip.fade_in_shape = getattr(clip, 'fade_in_shape', 'linear')
-        new_clip.fade_out = getattr(clip, 'fade_out', 0.0)
-        new_clip.fade_out_shape = getattr(clip, 'fade_out_shape', 'linear')
-        new_clip.pitch_semitones = getattr(clip, 'pitch_semitones', 0.0)
-        new_clip.volume = getattr(clip, 'volume', 1.0)
-        
+
+        # Copy editing properties (trim, fades, pitch, volume) when available
+        try:
+            new_clip.start_offset = getattr(clip, 'start_offset', 0.0)
+            new_clip.end_offset = getattr(clip, 'end_offset', 0.0)
+            new_clip.fade_in = getattr(clip, 'fade_in', 0.0)
+            new_clip.fade_in_shape = getattr(clip, 'fade_in_shape', 'linear')
+            new_clip.fade_out = getattr(clip, 'fade_out', 0.0)
+            new_clip.fade_out_shape = getattr(clip, 'fade_out_shape', 'linear')
+            new_clip.pitch_semitones = getattr(clip, 'pitch_semitones', 0.0)
+            new_clip.volume = getattr(clip, 'volume', 1.0)
+        except Exception:
+            pass
+
         return new_clip
 
     def _show_clip_properties(self):
@@ -1777,6 +1812,14 @@ Samples: {len(clip.buffer)}
                             print(f"    - {clip.name}: {clip.start_time}s, MIDI clip with {len(getattr(clip, 'notes', []))} notes")
                         else:
                             print(f"    - {clip.name}: {clip.start_time}s, buffer={len(clip.buffer)} samples")
+                        # Ensure MIDI clips reference the track's synthesizer
+                        try:
+                            from src.midi.clip import MidiClip
+                            if isinstance(clip, MidiClip) and getattr(clip, 'instrument', None) is None:
+                                clip.instrument = getattr(track, 'instrument', None)
+                        except Exception:
+                            pass
+
                         # Add clip to timeline using proper API
                         self.timeline.add_clip(track_idx, clip)
             
