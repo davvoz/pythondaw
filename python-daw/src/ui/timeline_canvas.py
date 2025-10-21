@@ -1,14 +1,9 @@
-"""Timeline canvas management for visual timeline rendering and clip interaction.
-
-Refactored to use modular components for better separation of concerns.
-"""
-
 try:
     import tkinter as tk
 except Exception:  # pragma: no cover
     tk = None
 
-# Import timeline components
+# Import timeline components for modular architecture
 from .timeline.geometry import TimelineGeometry
 from .timeline.renderers import (
     RulerRenderer, GridRenderer, TrackRenderer,
@@ -19,31 +14,42 @@ from .timeline.controllers import (
     DragController, ResizeController, BoxSelectController,
     LoopMarkerController, TrackControlsController
 )
+from .timeline.canvas_manager import CanvasManager
+from .timeline.mouse_event_coordinator import MouseEventCoordinator
 
 
 class TimelineCanvas:
     """Manages the timeline canvas, rendering, and clip interactions.
     
-    This class orchestrates the various timeline components and delegates
-    rendering and interaction logic to specialized modules.
+    This class orchestrates various timeline components:
+    - CanvasManager: Handles all canvas widgets and scrolling
+    - Geometry: Coordinate conversions and dimensions
+    - Renderers: Specialized drawing for rulers, grids, clips, etc.
+    - Services: Snap-to-grid and clipboard operations
+    - Controllers: Drag, resize, selection interactions
+    - MouseEventCoordinator: Routes mouse events to appropriate handlers
     """
 
     def __init__(self, parent, project=None, mixer=None, timeline=None, player=None):
+        """Initialize timeline canvas with all components.
+        
+        Args:
+            parent: Parent Tkinter widget
+            project: Project object
+            mixer: Mixer object
+            timeline: Timeline object
+            player: Player object
+        """
+        # Core dependencies (injected)
         self.project = project
         self.mixer = mixer
         self.timeline = timeline
         self.player = player
         
-        # Callback for notifying selection changes to parent (MainWindow)
+        # Callback for track selection notification
         self.on_track_selected = None
         
-        # Canvas state
-        self.canvas = None  # Main timeline canvas (scrollable)
-        self.controls_canvas = None  # Fixed controls canvas (left side)
-        self.scroll = None
-        self.cursor_id = None
-        
-        # Initialize geometry and renderers
+        # Initialize geometry (coordinate system and dimensions)
         self.geometry = TimelineGeometry(
             px_per_sec=200,
             track_height=80,
@@ -51,285 +57,330 @@ class TimelineCanvas:
             left_margin=280
         )
         
+        # Initialize canvas manager (UI widget management)
+        self.canvas_manager = CanvasManager(self.geometry)
+        
+        # Build UI and get references to canvases
+        canvases = self.canvas_manager.build(parent)
+        
+        # Maintain backward compatibility - direct canvas references
+        self.canvas = canvases.get('canvas')
+        self.controls_canvas = canvases.get('controls_canvas')
+        self.ruler_canvas = canvases.get('ruler_canvas')
+        self.controls_ruler_canvas = canvases.get('controls_ruler_canvas')
+        self.scroll = canvases.get('hscroll')  # Legacy name
+        self.hscroll = canvases.get('hscroll')
+        self.vscroll = canvases.get('vscroll')
+        
+        # Legacy state for backward compatibility
+        self.cursor_id = None
+        
+        # Initialize renderers (specialized drawing components)
+        self._init_renderers()
+        
+        # Initialize services (snap and clipboard)
+        self._init_services()
+        
+        # Initialize controllers (interaction handlers)
+        self._init_controllers()
+        
+        # Initialize mouse event coordinator (event routing)
+        self._init_event_coordinator()
+        
+        # Clip selection state
+        self.selected_clip = None  # (track_index, clip) - backward compatibility
+        self.selected_clips = []  # [(track_index, clip), ...] - multi-selection
+        self.clip_canvas_ids = {}  # {canvas_id: (track_idx, clip)}
+        
+        # Track selection state
+        self.selected_track_idx = None
+        
+        # Context menus (set by MainWindow)
+        self.track_menu = None
+    
+    def _init_renderers(self):
+        """Initialize all renderer components.
+        
+        Renderers are responsible for drawing different timeline elements.
+        Each renderer is specialized for a specific visual element.
+        """
         self.ruler_renderer = RulerRenderer(self.geometry)
         self.grid_renderer = GridRenderer(self.geometry)
         self.track_renderer = TrackRenderer(self.geometry)
         self.clip_renderer = ClipRenderer(self.geometry)
         self.cursor_renderer = CursorRenderer(self.geometry)
         self.loop_renderer = LoopRenderer(self.geometry)
+    
+    def _init_services(self):
+        """Initialize service components.
         
-        # Initialize services
-        self.snap_service = SnapService(project)
+        Services provide utility functions like snapping and clipboard.
+        """
+        self.snap_service = SnapService(self.project)
         self.clipboard_service = ClipboardService()
+    
+    def _init_controllers(self):
+        """Initialize controller components.
         
-        # Initialize controllers
+        Controllers handle user interactions like dragging and resizing.
+        All controllers are configured to trigger redraw on changes.
+        """
         self.drag_controller = DragController(self.geometry, self.snap_service)
         self.resize_controller = ResizeController(self.geometry, self.snap_service)
         self.box_select_controller = BoxSelectController(self.geometry)
         self.loop_marker_controller = LoopMarkerController(self.geometry, self.snap_service)
-        self.track_controls_controller = TrackControlsController(self.geometry, self.geometry.left_margin)
+        self.track_controls_controller = TrackControlsController(
+            self.geometry, 
+            self.geometry.left_margin
+        )
         
-        # Set invalidation callbacks for controllers
+        # Set invalidation callbacks (trigger redraw on changes)
         self.drag_controller.on_invalidate = self.redraw
         self.resize_controller.on_invalidate = self.redraw
         self.loop_marker_controller.on_invalidate = self.redraw
         self.track_controls_controller.on_invalidate = self.redraw
-        
-        # Clip selection state
-        self.selected_clip = None  # (track_index, clip_object) - for backward compatibility
-        self.selected_clips = []  # [(track_index, clip_object), ...] - for multiple selection
-        self.clip_canvas_ids = {}  # {canvas_id: (track_idx, clip_obj)}
-        
-        # Loop selection
-        self.loop_selection_start = None
-        
-        # Context menus (will be set by MainWindow)
-        self.track_menu = None
-
-        # Track selection state
-        self.selected_track_idx = None
-
-        self._build_canvas(parent)
     
-    # Backward compatibility properties
+    def _init_event_coordinator(self):
+        """Initialize mouse event coordinator.
+        
+        The coordinator routes mouse events to appropriate controllers
+        and maintains separation between event handling and business logic.
+        """
+        self.event_coordinator = MouseEventCoordinator(self.geometry, self.canvas_manager)
+        
+        # Inject controllers into coordinator
+        self.event_coordinator.drag_controller = self.drag_controller
+        self.event_coordinator.resize_controller = self.resize_controller
+        self.event_coordinator.box_select_controller = self.box_select_controller
+        self.event_coordinator.loop_marker_controller = self.loop_marker_controller
+        self.event_coordinator.track_controls_controller = self.track_controls_controller
+        
+        # Set event callbacks
+        self.event_coordinator.on_clip_click = self._handle_clip_click
+        self.event_coordinator.on_empty_click = self._handle_empty_click
+        self.event_coordinator.on_control_click = self._handle_control_click
+        self.event_coordinator.on_loop_selection = self._handle_loop_selection
+        self.event_coordinator.on_track_selection = self.select_track
+        
+        # Connect canvas manager callbacks to event coordinator
+        self.canvas_manager.on_mouse_wheel = self._on_mouse_wheel
+        self.canvas_manager.on_mouse_click = self._on_mouse_click
+        self.canvas_manager.on_mouse_drag = self._on_mouse_drag
+        self.canvas_manager.on_mouse_release = self._on_mouse_release
+        self.canvas_manager.on_mouse_motion = self._on_mouse_motion
+        self.canvas_manager.on_mouse_right_click = self._on_mouse_right_click
+    
+    # =========================================================================
+    # EVENT HANDLERS - Route events from canvas manager to event coordinator
+    # =========================================================================
+    
+    def _on_mouse_wheel(self, event):
+        """Route mouse wheel events to coordinator."""
+        self.event_coordinator.handle_mouse_wheel(event, self.mixer)
+    
+    def _on_mouse_click(self, event):
+        """Route click events to coordinator."""
+        self.event_coordinator.handle_click(
+            event,
+            mixer=self.mixer,
+            timeline=self.timeline,
+            player=self.player,
+            clip_finder=self._find_clip_at,
+            control_finder=self._find_control_at
+        )
+        # Result contains info about what was clicked for debugging/logging
+    
+    def _on_mouse_drag(self, event):
+        """Route drag events to coordinator."""
+        self.event_coordinator.handle_drag(event, self.mixer, self.player)
+        # Result contains info about drag operation
+    
+    def _on_mouse_release(self, event):
+        """Route release events to coordinator."""
+        result = self.event_coordinator.handle_release(
+            event,
+            timeline=self.timeline,
+            player=self.player,
+            snap_func=self.snap_time
+        )
+        
+        # Handle specific release results
+        if result['type'] == 'resize_release' and result.get('data'):
+            clip = result['data'].get('clip')
+            if clip:
+                print(f"✓ Resize complete: {clip.name} | "
+                     f"Start: {clip.start_time:.3f}s | Duration: {clip.duration:.3f}s")
+        
+        elif result['type'] == 'volume_release' and result.get('data'):
+            track_idx = result['data'].get('track')
+            if track_idx is not None and self.mixer:
+                volume = self.mixer.tracks[track_idx].get('volume', 1.0)
+                print(f"🔊 Volume adjusted: Track {track_idx + 1} = {volume:.2f}")
+        
+        elif result['type'] == 'pan_release' and result.get('data'):
+            track_idx = result['data'].get('track')
+            if track_idx is not None and self.mixer:
+                pan = self.mixer.tracks[track_idx].get('pan', 0.0)
+                pan_text = "C" if abs(pan) < 0.05 else (
+                    f"L{abs(pan):.1f}" if pan < 0 else f"R{pan:.1f}"
+                )
+                print(f"🎚️ Pan adjusted: Track {track_idx + 1} = {pan_text}")
+        
+        elif result['type'] == 'box_selection_complete':
+            selected = result.get('data', [])
+            if selected:
+                self.selected_clips = selected
+                self.selected_clip = selected[0] if selected else None
+                print(f"📦 Box selection: {len(selected)} clip(s) selected")
+            self.redraw()
+    
+    def _on_mouse_motion(self, event):
+        """Route motion events to coordinator."""
+        self.event_coordinator.handle_motion(
+            event,
+            player=self.player,
+            clip_finder=self._find_clip_at,
+            control_finder=self._find_control_at
+        )
+        # Result contains cursor changes already applied by coordinator
+    
+    def _on_mouse_right_click(self, event):
+        """Handle right-click context menu (delegated to MainWindow)."""
+        # This is handled by MainWindow's context menu setup
+        pass
+    
+    # =========================================================================
+    # CLICK ACTION HANDLERS - Called by event coordinator
+    # =========================================================================
+    
+    def _handle_clip_click(self, track_idx, clip, multi=False):
+        """Handle clip click action.
+        
+        Args:
+            track_idx: Track index
+            clip: Clip object
+            multi: True if Ctrl was pressed (multi-selection)
+        """
+        if multi:
+            self.toggle_clip_selection(track_idx, clip)
+        else:
+            self.select_clip(track_idx, clip)
+    
+    def _handle_empty_click(self, x, y, ctrl_pressed):
+        """Handle click on empty timeline area.
+        
+        Args:
+            x: Canvas x coordinate
+            y: Canvas y coordinate
+            ctrl_pressed: True if Ctrl was pressed
+        """
+        # Clear selection if not holding Ctrl
+        if not ctrl_pressed:
+            self.clear_selection()
+        
+        # Check if we have clipboard content - set paste position
+        if self.clipboard_service.has_clips() and y > self.geometry.ruler_height:
+            time = self.geometry.x_to_time(x)
+            self.clipboard_service.set_paste_position(
+                max(0, self.snap_time(time)), 
+                visible=True
+            )
+            self.redraw()
+            print(f"📍 Paste position set to {self.clipboard_service.paste_position:.2f}s "
+                 f"(press Ctrl+V to paste)")
+        else:
+            # No clipboard or clicked in ruler - hide paste cursor
+            self.clipboard_service.paste_cursor_visible = False
+            self.redraw()
+    
+    def _handle_control_click(self, control, x, y):
+        """Handle click on track control.
+        
+        Args:
+            control: Control info dict
+            x: Canvas x coordinate
+            y: Canvas y coordinate
+        """
+        control_type = control['type']
+        track_idx = control['track_idx']
+        
+        if control_type == 'button':
+            action = control['action']
+            if action == 'mute':
+                self._toggle_mute(track_idx)
+            elif action == 'solo':
+                self._toggle_solo(track_idx)
+            elif action == 'fx':
+                self._open_effects_dialog(track_idx)
+            self.select_track(track_idx)
+        
+        elif control_type == 'volume':
+            self.track_controls_controller.start_volume_drag(track_idx, x, self.mixer)
+            self.select_track(track_idx)
+        
+        elif control_type == 'pan':
+            self.track_controls_controller.start_pan_drag(track_idx, x, self.mixer)
+            self.select_track(track_idx)
+    
+    def _handle_loop_selection(self, start, end, player):
+        """Handle loop region selection completion.
+        
+        Args:
+            start: Loop start time
+            end: Loop end time
+            player: Player object
+        """
+        player.set_loop(True, start, end)
+        self.redraw()
+        print(f"🔁 Loop region set: {start:.3f}s - {end:.3f}s")
+    
+    # =========================================================================
+    # BACKWARD COMPATIBILITY PROPERTIES
+    # =========================================================================
+    
     @property
     def px_per_sec(self):
+        """Get pixels per second (backward compatibility)."""
         return self.geometry.px_per_sec
     
     @px_per_sec.setter
     def px_per_sec(self, value):
+        """Set pixels per second (backward compatibility)."""
         self.geometry.px_per_sec = value
     
     @property
     def track_height(self):
+        """Get track height (backward compatibility)."""
         return self.geometry.track_height
     
     @property
     def ruler_height(self):
+        """Get ruler height (backward compatibility)."""
         return self.geometry.ruler_height
     
     @property
     def left_margin(self):
+        """Get left margin (backward compatibility)."""
         return self.geometry.left_margin
     
     @property
     def snap_enabled(self):
+        """Get snap enabled state (backward compatibility)."""
         return self.snap_service.enabled
     
     @property
     def grid_division(self):
+        """Get grid division (backward compatibility)."""
         return self.snap_service.grid_division
     
     @property
     def clipboard(self):
+        """Get clipboard data (backward compatibility)."""
         return self.clipboard_service.clipboard
     
     @property
     def paste_position(self):
-        return self.clipboard_service.paste_position
-    
-    @property
-    def paste_cursor_visible(self):
-        return self.clipboard_service.paste_cursor_visible
-
-    def _build_canvas(self, parent):
-        """Build the timeline canvas with fixed controls on left and scrollable timeline on right."""
-        if parent is None or tk is None:
-            return
-            
-        # Main container
-        container = tk.Frame(parent, bg="#0d0d0d")
-        container.pack(fill="both", expand=True)
-        
-        # TOP ROW: Header row with controls ruler (left) and timeline ruler (right)
-        header_frame = tk.Frame(container, bg="#0d0d0d", height=self.ruler_height)
-        header_frame.pack(side="top", fill="x")
-        header_frame.pack_propagate(False)
-        
-        # Left part of header (above controls)
-        self.controls_ruler_canvas = tk.Canvas(
-            header_frame,
-            bg="#1a1a1a",
-            highlightthickness=0,
-            borderwidth=0,
-            width=self.left_margin,
-            height=self.ruler_height
-        )
-        self.controls_ruler_canvas.pack(side="left", fill="y")
-        
-        # Right part of header (timeline ruler - scrolls horizontally but NOT vertically)
-        self.ruler_canvas = tk.Canvas(
-            header_frame,
-            bg="#1a1a1a",
-            highlightthickness=0,
-            borderwidth=0,
-            height=self.ruler_height
-        )
-        self.ruler_canvas.pack(side="left", fill="both", expand=True)
-        
-        # BOTTOM ROW: Scrollable content
-        content_frame = tk.Frame(container, bg="#0d0d0d")
-        content_frame.pack(side="top", fill="both", expand=True)
-        
-        # LEFT: Fixed controls canvas (no horizontal scroll)
-        self.controls_canvas = tk.Canvas(
-            content_frame,
-            bg="#1a1a1a",
-            highlightthickness=0,
-            borderwidth=0,
-            width=self.left_margin
-        )
-        self.controls_canvas.pack(side="left", fill="y")
-        
-        # RIGHT: Scrollable timeline canvas
-        timeline_frame = tk.Frame(content_frame, bg="#0d0d0d")
-        timeline_frame.pack(side="left", fill="both", expand=True)
-        
-        self.canvas = tk.Canvas(
-            timeline_frame,
-            bg="#0d0d0d",
-            highlightthickness=0,
-            borderwidth=0
-        )
-        
-        # Scrollbars
-        try:
-            from tkinter import ttk
-            hscroll = ttk.Scrollbar(timeline_frame, orient="horizontal", command=self._on_xscroll)
-            vscroll = ttk.Scrollbar(content_frame, orient="vertical", command=self._on_vscroll)
-        except Exception:
-            hscroll = tk.Scrollbar(timeline_frame, orient="horizontal", command=self._on_xscroll)
-            vscroll = tk.Scrollbar(content_frame, orient="vertical", command=self._on_vscroll)
-        
-        # Configure canvas scrolling
-        self.canvas.configure(
-            xscrollcommand=self._on_xscroll_change,
-            yscrollcommand=self._on_yscroll_change
-        )
-        
-        # Layout
-        self.canvas.grid(row=0, column=0, sticky="nsew")
-        vscroll.pack(side="right", fill="y")
-        
-        timeline_frame.grid_rowconfigure(0, weight=1)
-        timeline_frame.grid_columnconfigure(0, weight=1)
-        
-        self.scroll = hscroll
-        self.hscroll = hscroll
-        self.vscroll = vscroll
-        self._hscroll_visible = False
-        self._vscroll_visible = False
-        
-        # Mouse bindings
-        self._bind_mouse_events()
-
-        # Update scrollbar visibility on resize
-        self.canvas.bind('<Configure>', lambda e: self._update_scrollbars())
-        self.controls_canvas.bind('<Configure>', lambda e: self._sync_controls_height())
-    
-    def _on_xscroll(self, *args):
-        """Handle horizontal scroll - sync timeline canvas and ruler canvas."""
-        self.canvas.xview(*args)
-        if hasattr(self, 'ruler_canvas'):
-            self.ruler_canvas.xview(*args)
-    
-    def _on_vscroll(self, *args):
-        """Handle vertical scroll - sync both canvases."""
-        self.canvas.yview(*args)
-        self.controls_canvas.yview(*args)
-    
-    def _sync_controls_height(self):
-        """Sync controls canvas scrollregion with main canvas."""
-        if self.controls_canvas and self.canvas:
-            # Match the height of the controls canvas to the main canvas
-            height = self.compute_height()
-            self.controls_canvas.config(scrollregion=(0, 0, self.left_margin, height))
-
-    def _bind_mouse_events(self):
-        """Bind mouse events for clip interaction."""
-        if self.canvas is None:
-            return
-            
-        # Mouse wheel for scrolling (both canvases)
-        def on_wheel(event):
-            try:
-                # Determine if scrolling is needed based on content
-                bbox = self.canvas.bbox('all') or (0, 0, 0, 0)
-                content_w = max(0, bbox[2] - bbox[0])
-                content_h = max(0, bbox[3] - bbox[1])
-                cw = max(1, self.canvas.winfo_width())
-                ch = max(1, self.canvas.winfo_height())
-                need_h = content_w > cw + 1
-                need_v = content_h > ch + 1
-
-                if event.state & 0x0001:  # Shift pressed - horizontal scroll
-                    if not need_h:
-                        return
-                    delta = (event.delta or -event.num) / 120.0
-                    self.canvas.xview_scroll(int(-delta * 3), 'units')
-                else:  # Normal wheel - vertical scroll
-                    if not need_v:
-                        return
-                    delta = (event.delta or -event.num) / 120.0
-                    # Sync both canvases vertically
-                    self.canvas.yview_scroll(int(-delta), 'units')
-                    if self.controls_canvas:
-                        self.controls_canvas.yview_scroll(int(-delta), 'units')
-            except Exception:
-                pass
-        
-        # Bind to both canvases
-        self.canvas.bind('<MouseWheel>', on_wheel)
-        self.canvas.bind('<Button-1>', self.on_click)
-        self.canvas.bind('<B1-Motion>', self.on_drag)
-        self.canvas.bind('<ButtonRelease-1>', self.on_release)
-        self.canvas.bind('<Button-3>', self.on_right_click)
-        self.canvas.bind('<Motion>', self.on_motion)
-        
-        if self.controls_canvas:
-            self.controls_canvas.bind('<MouseWheel>', on_wheel)
-            self.controls_canvas.bind('<Button-1>', self.on_click)
-            self.controls_canvas.bind('<B1-Motion>', self.on_drag)
-            self.controls_canvas.bind('<ButtonRelease-1>', self.on_release)
-            self.controls_canvas.bind('<Motion>', self.on_motion)
-        
-        # Bind ruler canvas for loop marker dragging
-        if hasattr(self, 'ruler_canvas') and self.ruler_canvas:
-            self.ruler_canvas.bind('<Button-1>', self.on_click)
-            self.ruler_canvas.bind('<B1-Motion>', self.on_drag)
-            self.ruler_canvas.bind('<ButtonRelease-1>', self.on_release)
-            self.ruler_canvas.bind('<Motion>', self.on_motion)
-    
-    def set_vscroll_callback(self, callback):
-        """Set callback to be called when vertical scroll position changes.
-        
-        Args:
-            callback: Function to call with scroll position (first, last)
-        """
-        if self.canvas:
-            def on_scroll(*args):
-                callback(*args)
-                self.vscroll.set(*args)
-            self.canvas.configure(yscrollcommand=on_scroll)
-
-    def compute_width(self):
-        """Calculate timeline width based on content (without left margin)."""
-        return self.geometry.compute_width(self.timeline, min_width=800)
-
-    def compute_height(self):
-        """Calculate timeline height based on track count."""
-        tracks_count = max(1, len(getattr(self.mixer, 'tracks', [])))
-        return self.geometry.compute_height(tracks_count)
-    
-    # Backward compatibility properties
-    @property
-    def clipboard(self):
-        """Access clipboard data (backward compatibility)."""
-        return self.clipboard_service.clipboard
-    
-    @property
-    def paste_position(self):
-        """Access paste position (backward compatibility)."""
+        """Get paste position (backward compatibility)."""
         return self.clipboard_service.paste_position
     
     @paste_position.setter
@@ -339,139 +390,91 @@ class TimelineCanvas:
     
     @property
     def paste_cursor_visible(self):
-        """Access paste cursor visibility (backward compatibility)."""
+        """Get paste cursor visibility (backward compatibility)."""
         return self.clipboard_service.paste_cursor_visible
     
     @paste_cursor_visible.setter
     def paste_cursor_visible(self, value: bool):
         """Set paste cursor visibility (backward compatibility)."""
         self.clipboard_service.paste_cursor_visible = value
+    
+    # =========================================================================
+    # DIMENSION CALCULATIONS
+    # =========================================================================
+    
+    def set_vscroll_callback(self, callback):
+        """Set callback for vertical scroll position changes.
+        
+        Args:
+            callback: Function(first, last) to call on scroll changes
+        """
+        if self.canvas:
+            def on_scroll(*args):
+                callback(*args)
+                if self.vscroll:
+                    self.vscroll.set(*args)
+            self.canvas.configure(yscrollcommand=on_scroll)
+    
+    def compute_width(self):
+        """Calculate timeline width based on content (delegates to geometry).
+        
+        Returns:
+            Width in pixels
+        """
+        return self.geometry.compute_width(self.timeline, min_width=800)
+    
+    def compute_height(self):
+        """Calculate timeline height based on track count (delegates to geometry).
+        
+        Returns:
+            Height in pixels
+        """
+        tracks_count = max(1, len(getattr(self.mixer, 'tracks', [])))
+        return self.geometry.compute_height(tracks_count)
+    
+    # =========================================================================
+    # RENDERING - Orchestrates specialized renderer components
+    # =========================================================================
 
     def redraw(self):
-        """Redraw the entire timeline."""
+        """Redraw the entire timeline (delegates to canvas manager and renderers).
+        
+        This method orchestrates the complete redraw cycle:
+        1. Clear all canvases
+        2. Update scroll regions
+        3. Draw all timeline elements in correct order
+        4. Update scrollbar visibility
+        """
         if self.canvas is None:
             return
         
-        # Clear all canvases
-        self.canvas.delete("all")
-        if self.controls_canvas:
-            self.controls_canvas.delete("all")
-        if hasattr(self, 'ruler_canvas'):
-            self.ruler_canvas.delete("all")
-        if hasattr(self, 'controls_ruler_canvas'):
-            self.controls_ruler_canvas.delete("all")
+        # Step 1: Clear all canvases (delegate to canvas manager)
+        self.canvas_manager.clear_all()
         
+        # Step 2: Calculate dimensions
         width = self.compute_width()
         height = self.compute_height()
         
-        # Set scroll regions
-        self.canvas.config(scrollregion=(0, 0, width, height))
-        if self.controls_canvas:
-            self.controls_canvas.config(scrollregion=(0, 0, self.left_margin, height))
-        # Ruler canvas scrolls horizontally like main canvas but has fixed height
-        if hasattr(self, 'ruler_canvas'):
-            self.ruler_canvas.config(scrollregion=(0, 0, width, self.ruler_height))
+        # Step 3: Update scroll regions (delegate to canvas manager)
+        self.canvas_manager.update_scroll_regions(width, height)
         
-        # If content fits, reset view to top/left to avoid stray offsets
-        try:
-            cw = max(1, self.canvas.winfo_width())
-            ch = max(1, self.canvas.winfo_height())
-            if width <= cw:
-                self.canvas.xview_moveto(0)
-                if hasattr(self, 'ruler_canvas'):
-                    self.ruler_canvas.xview_moveto(0)
-            if height <= ch:
-                self.canvas.yview_moveto(0)
-                if self.controls_canvas:
-                    self.controls_canvas.yview_moveto(0)
-        except Exception:
-            pass
+        # Step 4: Reset view if content fits (delegate to canvas manager)
+        self.canvas_manager.reset_view_if_fits(width, height)
         
-        # Draw in correct order
-        self._draw_ruler(width)  # Draw ruler on fixed ruler_canvas (scrolls horizontally only)
-        self._draw_track_controls()  # Draw controls on left canvas
-        self._draw_track_backgrounds(width)  # Draw track backgrounds on main canvas
+        # Step 5: Draw all elements in correct z-order
+        self._draw_ruler(width)
+        self._draw_track_controls()
+        self._draw_track_backgrounds(width)
         self._draw_grid(width, height)
         self._draw_clips()
         self._draw_loop_markers(height)
         self._draw_cursor(height)
-
-        # Ensure scrollbars reflect current content
+        
+        # Step 6: Update scrollbar visibility (delegate to canvas manager)
         try:
-            self._update_scrollbars()
+            self.canvas_manager.update_scrollbars()
         except Exception:
             pass
-
-    def _on_xscroll_change(self, first, last):
-        """Sync horizontal scrollbar and ruler canvas."""
-        if hasattr(self, 'hscroll') and self.hscroll:
-            try:
-                self.hscroll.set(first, last)
-            except Exception:
-                pass
-        # Sync ruler canvas horizontal scroll with main canvas
-        if hasattr(self, 'ruler_canvas'):
-            try:
-                self.ruler_canvas.xview_moveto(first)
-            except Exception:
-                pass
-        
-    def _on_yscroll_change(self, first, last):
-        """Sync vertical scrollbar and possibly update visibility."""
-        if hasattr(self, 'vscroll') and self.vscroll:
-            try:
-                self.vscroll.set(first, last)
-            except Exception:
-                pass
-        # No heavy work here; visibility handled by _update_scrollbars
-
-    def _update_scrollbars(self):
-        """Show/hide scrollbars based on content vs viewport size."""
-        if self.canvas is None:
-            return
-        # Determine content size from scrollregion
-        try:
-            bbox = self.canvas.bbox('all')
-            if not bbox:
-                return
-            content_w = max(0, bbox[2] - bbox[0])
-            content_h = max(0, bbox[3] - bbox[1])
-            cw = max(1, self.canvas.winfo_width())
-            ch = max(1, self.canvas.winfo_height())
-            need_h = content_w > cw + 1
-            need_v = content_h > ch + 1
-        except Exception:
-            return
-        
-        # Horizontal scrollbar
-        if need_h and not self._hscroll_visible:
-            try:
-                self.hscroll.grid(row=1, column=0, sticky='ew')
-                self._hscroll_visible = True
-            except Exception:
-                pass
-        elif not need_h and self._hscroll_visible:
-            try:
-                self.hscroll.grid_remove()
-                self._hscroll_visible = False
-                self.canvas.xview_moveto(0)
-            except Exception:
-                pass
-        
-        # Vertical scrollbar
-        if need_v and not self._vscroll_visible:
-            try:
-                self.vscroll.grid(row=0, column=1, sticky='ns')
-                self._vscroll_visible = True
-            except Exception:
-                pass
-        elif not need_v and self._vscroll_visible:
-            try:
-                self.vscroll.grid_remove()
-                self._vscroll_visible = False
-                self.canvas.yview_moveto(0)
-            except Exception:
-                pass
     
     def _draw_ruler(self, width):
         """Draw the time ruler at the top with time markers on the fixed ruler canvas."""
