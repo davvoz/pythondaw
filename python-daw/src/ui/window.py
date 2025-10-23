@@ -1256,14 +1256,6 @@ class MainWindow:
             # Delegate menu rendering to ClipContextMenu
             if self._clip_menu:
                 self._clip_menu.show(event, clip_name, multi_selection=multi_selection)
-                # Add Piano Roll option for MIDI (separate popup for now)
-                if is_midi and tk is not None:
-                    menu = tk.Menu(self._root, tearoff=0, bg="#2d2d2d", fg="#f5f5f5", activebackground="#3b82f6")
-                    menu.add_command(label="🎹 Open Piano Roll", command=lambda: self._open_piano_roll_editor(clip))
-                    try:
-                        menu.tk_popup(event.x_root+10, event.y_root+10)
-                    finally:
-                        menu.grab_release()
         else:
             # Right-click on empty timeline - show paste menu
             if y > self._timeline_canvas.ruler_height:
@@ -1687,7 +1679,7 @@ Samples: {len(clip.buffer)}
             if self._timeline_canvas:
                 self._timeline_canvas.redraw()
 
-        show_clip_inspector(self._root, clip, on_apply=on_apply)
+        show_clip_inspector(self._root, clip, on_apply=on_apply, player=self.player)
 
     def _open_piano_roll_editor(self, clip):
         """Open the Piano Roll editor for a MIDI clip and refresh on apply."""
@@ -1708,7 +1700,7 @@ Samples: {len(clip.buffer)}
                 pass
 
         try:
-            editor = PianoRollEditor(self._root, clip, on_apply=_on_apply)
+            editor = PianoRollEditor(self._root, clip, on_apply=_on_apply, player=self.player)
             editor.show()
         except Exception as e:
             print(f"Failed to open Piano Roll: {e}")

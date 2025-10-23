@@ -15,13 +15,14 @@ from src.ui.waveform_editor import WaveformEditor
 FADE_SHAPES = ["linear", "exp", "log", "s-curve"]
 
 
-def show_midi_clip_info(parent, midi_clip, on_apply: Optional[Callable] = None):
+def show_midi_clip_info(parent, midi_clip, on_apply: Optional[Callable] = None, player=None):
     """Open Piano Roll editor directly for MIDI clip.
     
     Parameters:
         parent: Tk parent window
         midi_clip: MidiClip instance
         on_apply: optional callback invoked when changes are made
+        player: optional Player instance for playhead tracking
     """
     if tk is None or ttk is None or parent is None or midi_clip is None:
         return
@@ -33,7 +34,7 @@ def show_midi_clip_info(parent, midi_clip, on_apply: Optional[Callable] = None):
             if callable(on_apply):
                 on_apply(clip)
         
-        editor = PianoRollEditor(parent, midi_clip, on_apply=on_piano_apply)
+        editor = PianoRollEditor(parent, midi_clip, on_apply=on_piano_apply, player=player)
         editor.show()
     except Exception as e:
         print(f"Error opening Piano Roll: {e}")
@@ -41,13 +42,14 @@ def show_midi_clip_info(parent, midi_clip, on_apply: Optional[Callable] = None):
         traceback.print_exc()
 
 
-def show_clip_inspector(parent, clip: AudioClip, on_apply: Optional[Callable[[AudioClip], None]] = None):
+def show_clip_inspector(parent, clip: AudioClip, on_apply: Optional[Callable[[AudioClip], None]] = None, player=None):
     """Open a small editor for a single AudioClip with real-time updates.
 
     Parameters:
         parent: Tk parent window
         clip: AudioClip instance to edit (in-place)
         on_apply: optional callback invoked when properties change (for live updates)
+        player: optional Player instance for playhead tracking in Piano Roll
     """
     if tk is None or ttk is None or parent is None or clip is None:
         return
@@ -55,7 +57,7 @@ def show_clip_inspector(parent, clip: AudioClip, on_apply: Optional[Callable[[Au
     # Check if this is a MIDI clip - if so, show different editor
     if isinstance(clip, MidiClip):
         # For MIDI clips, just show a simple message and open piano roll
-        show_midi_clip_info(parent, clip, on_apply)
+        show_midi_clip_info(parent, clip, on_apply, player=player)
         return
 
     win = tk.Toplevel(parent)
