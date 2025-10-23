@@ -10,11 +10,13 @@ class TrackContextMenu:
     """Context menu for track operations (add clip, rename, delete, etc)."""
     
     def __init__(self, root, on_add_audio_clip=None, on_rename=None, on_delete=None, 
-                 on_duplicate=None, on_color=None, on_add_midi_demo=None, on_edit_synth=None):
+                 on_duplicate=None, on_color=None, on_add_midi_demo=None, on_edit_synth=None,
+                 on_change_instrument=None):
         self.root = root
         self.on_add_audio_clip = on_add_audio_clip
         self.on_add_midi_demo = on_add_midi_demo
         self.on_edit_synth = on_edit_synth
+        self.on_change_instrument = on_change_instrument
         self.on_rename = on_rename
         self.on_delete = on_delete
         self.on_duplicate = on_duplicate
@@ -45,7 +47,12 @@ class TrackContextMenu:
                     label=f"🎛️ Edit Synthesizer",
                     command=lambda: self.on_edit_synth(track_idx)
                 )
-            if self.on_add_midi_demo or self.on_edit_synth:
+            if self.on_change_instrument:
+                menu.add_command(
+                    label=f"🎸 Change Instrument",
+                    command=lambda: self.on_change_instrument(track_idx)
+                )
+            if self.on_add_midi_demo or self.on_edit_synth or self.on_change_instrument:
                 menu.add_separator()
         else:
             if self.on_add_audio_clip:

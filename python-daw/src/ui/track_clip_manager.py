@@ -261,6 +261,41 @@ class TrackClipManager:
             return
         
         track_name, color, track_type = result
+        
+        # For MIDI tracks, show instrument selector FIRST before creating anything
+        selected_instrument = None
+        if track_type.lower() == 'midi':
+            try:
+                from src.instruments import InstrumentRegistry
+                from .dialogs.instrument_selector_dialog import InstrumentSelectorDialog
+                
+                # Show instrument selector dialog
+                selector = InstrumentSelectorDialog(self.window._root)
+                selected_id = selector.show()
+                
+                if not selected_id:
+                    # User cancelled - abort track creation
+                    if self._status:
+                        self._status.set("✗ Track creation cancelled")
+                    print(f"ℹ User cancelled instrument selection, track not created")
+                    return
+                
+                # Create the selected instrument using Registry
+                selected_instrument = InstrumentRegistry.create_instrument(selected_id)
+                if not selected_instrument:
+                    if self._status:
+                        self._status.set("⚠ Failed to create instrument")
+                    return
+                
+                print(f"✓ Selected {selected_instrument.__class__.__name__} for new track '{track_name}'")
+                
+            except Exception as e:
+                print(f"Error in instrument selection: {e}")
+                if self._status:
+                    self._status.set(f"⚠ Error selecting instrument: {e}")
+                return
+        
+        # Now create the track (only if user confirmed or it's an audio track)
         # Add to mixer with type info
         self.mixer.add_track(name=track_name, volume=1.0, pan=0.0, color=color)
         # annotate last added track with type
@@ -273,13 +308,16 @@ class TrackClipManager:
         from src.core.track import Track
         track = Track(name=track_name)
         track.set_volume(1.0)
-        # attach a basic instrument if MIDI
-        if track_type.lower() == 'midi':
+        
+        # Attach the selected instrument if MIDI
+        if track_type.lower() == 'midi' and selected_instrument:
+            track.instrument = selected_instrument
+            # Sync to mixer
             try:
-                from src.instruments.synthesizer import Synthesizer
-                track.instrument = Synthesizer()
-            except Exception:
-                track.instrument = None
+                self.mixer.tracks[-1]["instrument"] = selected_instrument
+            except Exception as e:
+                print(f"Warning: Could not sync instrument to mixer: {e}")
+        
         self.project.create_track(track)
         
         if self._timeline_canvas:
@@ -413,6 +451,10 @@ class TrackClipManager:
             return
         
         try:
+            # Import registry for centralized instrument management
+            from src.instruments import InstrumentRegistry
+            from .dialogs.instrument_selector_dialog import InstrumentSelectorDialog
+            
             # Validate track type
             track_type = (self.mixer.tracks[track_idx].get("type") or "audio").lower()
             if track_type != 'midi':
@@ -429,29 +471,111 @@ class TrackClipManager:
             track = self.project.tracks[track_idx]
             synth = getattr(track, 'instrument', None)
             
-            if synth is None:
-                # Create a new synthesizer if none exists
-                from src.instruments.synthesizer import Synthesizer
-                synth = Synthesizer()
-                track.instrument = synth
-                print(f"✓ Created new synthesizer for track {track_idx + 1}")
+            print(f"DEBUG edit_track_synth: track_idx={track_idx}, synth={synth}, synth_class={synth.__class__.__name__ if synth else 'None'}")
             
-            # Open synth editor
-            from .synth_editor import show_synth_editor
+            if synth is None:
+                # Show instrument selector dialog
+                from .dialogs.instrument_selector_dialog import InstrumentSelectorDialog
+                
+                selector = InstrumentSelectorDialog(self.window._root)
+                selected_id = selector.show()
+                
+                if selected_id:
+                    # Create the selected instrument using Registry
+                    new_synth = InstrumentRegistry.create_instrument(selected_id)
+                    if new_synth:
+                        track.instrument = new_synth
+                        synth = new_synth  # Update local variable
+                        print(f"✓ Created {synth.__class__.__name__} (ID: {selected_id}) for track {track_idx + 1}")
+                    else:
+                        if self._status:
+                            self._status.set("⚠ Failed to create instrument")
+                        return
+                else:
+                    # User cancelled
+                    return
+            
+            # Open appropriate editor using registry
             track_name = self.mixer.tracks[track_idx].get("name", f"Track {track_idx + 1}")
             
             def on_synth_change(s):
                 """Called when synth parameters change."""
-                # No need to redraw timeline, but could update status
                 if self._status:
                     self._status.set(f"🎛️ Synth updated: {track_name}")
             
-            show_synth_editor(self.window._root, synth, track_name, on_apply=on_synth_change)
+            # Use InstrumentRegistry to open the correct editor
+            print(f"DEBUG: Opening editor for {synth.__class__.__name__}")
+            InstrumentRegistry.open_editor(self.window._root, synth, track_name, on_apply=on_synth_change)
             
         except Exception as e:
             if self._status:
                 self._status.set(f"⚠ Error opening synth editor: {e}")
             print(f"Error opening synth editor: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def change_instrument(self, track_idx):
+        """Change the instrument of a MIDI track."""
+        if self.mixer is None or track_idx >= len(self.mixer.tracks):
+            return
+        
+        track = self.mixer.tracks[track_idx]
+        track_name = track.get("name", f"Track {track_idx+1}")
+        
+        # Only for MIDI tracks
+        if track.get("type") != "midi":
+            if self._status:
+                self._status.set(f"⚠ '{track_name}' is not a MIDI track")
+            return
+        
+        try:
+            from src.instruments import InstrumentRegistry
+            from src.ui.dialogs import InstrumentSelectorDialog
+            
+            # Get current instrument from project track
+            if track_idx < len(self.project.tracks):
+                current_instrument = self.project.tracks[track_idx].instrument
+            else:
+                current_instrument = None
+            
+            # Show instrument selector dialog
+            dialog = InstrumentSelectorDialog(self.window._root, current_instrument=current_instrument)
+            selected_id = dialog.show()
+            
+            if selected_id:
+                # Create new instrument using registry
+                new_instrument = InstrumentRegistry.create_instrument(selected_id)
+                
+                if new_instrument:
+                    # Replace instrument in both mixer and project track
+                    track["instrument"] = new_instrument
+                    if track_idx < len(self.project.tracks):
+                        self.project.tracks[track_idx].instrument = new_instrument
+                    
+                    # Get instrument name from registry
+                    inst_info = InstrumentRegistry.get_instrument_info(selected_id)
+                    instrument_name = inst_info['name'] if inst_info else selected_id
+                    
+                    if self._status:
+                        self._status.set(f"✓ Changed '{track_name}' to {instrument_name}")
+                    
+                    # Optionally open the editor for the new instrument
+                    if messagebox:
+                        open_editor = messagebox.askyesno(
+                            "Instrument Changed",
+                            f"Instrument changed to {instrument_name}.\nDo you want to open the editor?",
+                            icon='question'
+                        )
+                        if open_editor:
+                            self.edit_track_synth(track_idx)
+                else:
+                    if self._status:
+                        self._status.set(f"⚠ Failed to create instrument")
+        
+        except Exception as e:
+            if self._status:
+                self._status.set(f"⚠ Error changing instrument: {e}")
+            print(f"Error changing instrument: {e}")
             import traceback
             traceback.print_exc()
     

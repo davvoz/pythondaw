@@ -100,6 +100,7 @@ class MainWindow:
             on_color=lambda track_idx: self._track_clip_manager.change_track_color(track_idx),
             on_add_midi_demo=lambda track_idx: self._track_clip_manager.add_midi_demo_clip_to_track(track_idx),
             on_edit_synth=lambda track_idx: self._track_clip_manager.edit_track_synth(track_idx),
+            on_change_instrument=lambda track_idx: self._track_clip_manager.change_instrument(track_idx)
         )
 
         # Setup UI components

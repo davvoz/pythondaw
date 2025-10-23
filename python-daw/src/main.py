@@ -14,6 +14,11 @@ from src.ui.transport import Transport
 
 
 def main():
+    # Initialize instrument registry
+    print("Initializing instrument registry...")
+    from src.instruments import register_builtin_instruments
+    register_builtin_instruments()
+    
     # Initialize the project
     project = Project("Demo Project")
 

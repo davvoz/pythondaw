@@ -247,21 +247,86 @@ class ProjectSerializer:
             return None
         try:
             from ..instruments.synthesizer import Synthesizer
+            from ..instruments.advanced_synthesizer import AdvancedSynthesizer
         except Exception:
             Synthesizer = None
-        if Synthesizer is None or not isinstance(instrument, Synthesizer):
+            AdvancedSynthesizer = None
+        
+        if Synthesizer is None:
             return None
+        
         try:
-            return {
-                "oscillator_type": getattr(instrument, 'oscillator_type', 'sine'),
-                "volume": getattr(instrument, 'volume', 1.0),
-                "attack": getattr(instrument, 'attack', 0.005),
-                "decay": getattr(instrument, 'decay', 0.05),
-                "sustain": getattr(instrument, 'sustain', 0.7),
-                "release": getattr(instrument, 'release', 0.1),
-            }
+            # Check if it's AdvancedSynthesizer
+            if AdvancedSynthesizer and isinstance(instrument, AdvancedSynthesizer):
+                return {
+                    "type": "AdvancedSynthesizer",
+                    # OSC 1
+                    "osc1_type": getattr(instrument, 'osc1_type', 'saw'),
+                    "osc1_octave": getattr(instrument, 'osc1_octave', 0),
+                    "osc1_semitone": getattr(instrument, 'osc1_semitone', 0),
+                    "osc1_detune": getattr(instrument, 'osc1_detune', 0.0),
+                    "osc1_level": getattr(instrument, 'osc1_level', 1.0),
+                    "osc1_pwm": getattr(instrument, 'osc1_pwm', 0.5),
+                    # OSC 2
+                    "osc2_type": getattr(instrument, 'osc2_type', 'square'),
+                    "osc2_octave": getattr(instrument, 'osc2_octave', 0),
+                    "osc2_semitone": getattr(instrument, 'osc2_semitone', 0),
+                    "osc2_detune": getattr(instrument, 'osc2_detune', 0.0),
+                    "osc2_level": getattr(instrument, 'osc2_level', 0.5),
+                    "osc2_pwm": getattr(instrument, 'osc2_pwm', 0.5),
+                    # MIXER & SUB
+                    "osc_mix": getattr(instrument, 'osc_mix', 0.5),
+                    "sub_enabled": getattr(instrument, 'sub_enabled', False),
+                    "sub_level": getattr(instrument, 'sub_level', 0.3),
+                    "sub_octave": getattr(instrument, 'sub_octave', -1),
+                    # UNISON
+                    "unison_enabled": getattr(instrument, 'unison_enabled', False),
+                    "unison_voices": getattr(instrument, 'unison_voices', 3),
+                    "unison_detune": getattr(instrument, 'unison_detune', 10.0),
+                    "unison_spread": getattr(instrument, 'unison_spread', 0.5),
+                    # FILTER
+                    "filter_enabled": getattr(instrument, 'filter_enabled', True),
+                    "filter_type": getattr(instrument, 'filter_type', 'lowpass'),
+                    "filter_cutoff": getattr(instrument, 'filter_cutoff', 8000.0),
+                    "filter_resonance": getattr(instrument, 'filter_resonance', 0.7),
+                    "filter_envelope_amount": getattr(instrument, 'filter_envelope_amount', 0.0),
+                    # FILTER ENV
+                    "filter_attack": getattr(instrument, 'filter_attack', 0.01),
+                    "filter_decay": getattr(instrument, 'filter_decay', 0.1),
+                    "filter_sustain": getattr(instrument, 'filter_sustain', 0.5),
+                    "filter_release": getattr(instrument, 'filter_release', 0.2),
+                    # AMP ENV
+                    "attack": getattr(instrument, 'attack', 0.01),
+                    "decay": getattr(instrument, 'decay', 0.1),
+                    "sustain": getattr(instrument, 'sustain', 0.7),
+                    "release": getattr(instrument, 'release', 0.2),
+                    # GLIDE
+                    "glide_enabled": getattr(instrument, 'glide_enabled', False),
+                    "glide_time": getattr(instrument, 'glide_time', 0.1),
+                    # LFO
+                    "lfo_enabled": getattr(instrument, 'lfo_enabled', False),
+                    "lfo_rate": getattr(instrument, 'lfo_rate', 5.0),
+                    "lfo_type": getattr(instrument, 'lfo_type', 'sine'),
+                    "lfo_amount": getattr(instrument, 'lfo_amount', 0.2),
+                    "lfo_target": getattr(instrument, 'lfo_target', 'pitch'),
+                    # MASTER
+                    "volume": getattr(instrument, 'volume', 0.8),
+                }
+            elif isinstance(instrument, Synthesizer):
+                # Basic Synthesizer
+                return {
+                    "type": "Synthesizer",
+                    "oscillator_type": getattr(instrument, 'oscillator_type', 'sine'),
+                    "volume": getattr(instrument, 'volume', 1.0),
+                    "attack": getattr(instrument, 'attack', 0.005),
+                    "decay": getattr(instrument, 'decay', 0.05),
+                    "sustain": getattr(instrument, 'sustain', 0.7),
+                    "release": getattr(instrument, 'release', 0.1),
+                }
         except Exception:
             return None
+        
+        return None
     
     def _deserialize_project(self, data: Dict[str, Any]):
         """Deserialize dictionary to Project instance."""
@@ -292,22 +357,84 @@ class ProjectSerializer:
         if track.type == "midi":
             try:
                 from ..instruments.synthesizer import Synthesizer
-                track.instrument = Synthesizer()
+                from ..instruments.advanced_synthesizer import AdvancedSynthesizer
             except Exception:
-                track.instrument = None
+                Synthesizer = None
+                AdvancedSynthesizer = None
+            
             # Restore synth parameters if present
-            try:
-                synth_conf = data.get("synth")
-                if synth_conf and track.instrument is not None:
+            synth_conf = data.get("synth")
+            if synth_conf:
+                synth_type = synth_conf.get("type", "Synthesizer")
+                
+                # Create appropriate synthesizer type
+                if synth_type == "AdvancedSynthesizer" and AdvancedSynthesizer:
+                    track.instrument = AdvancedSynthesizer()
                     inst = track.instrument
-                    inst.oscillator_type = synth_conf.get("oscillator_type", getattr(inst, 'oscillator_type', 'sine'))
-                    inst.volume = float(synth_conf.get("volume", getattr(inst, 'volume', 1.0)))
-                    inst.attack = float(synth_conf.get("attack", getattr(inst, 'attack', 0.005)))
-                    inst.decay = float(synth_conf.get("decay", getattr(inst, 'decay', 0.05)))
-                    inst.sustain = float(synth_conf.get("sustain", getattr(inst, 'sustain', 0.7)))
-                    inst.release = float(synth_conf.get("release", getattr(inst, 'release', 0.1)))
-            except Exception:
-                pass
+                    # OSC 1
+                    inst.osc1_type = synth_conf.get("osc1_type", 'saw')
+                    inst.osc1_octave = int(synth_conf.get("osc1_octave", 0))
+                    inst.osc1_semitone = int(synth_conf.get("osc1_semitone", 0))
+                    inst.osc1_detune = float(synth_conf.get("osc1_detune", 0.0))
+                    inst.osc1_level = float(synth_conf.get("osc1_level", 1.0))
+                    inst.osc1_pwm = float(synth_conf.get("osc1_pwm", 0.5))
+                    # OSC 2
+                    inst.osc2_type = synth_conf.get("osc2_type", 'square')
+                    inst.osc2_octave = int(synth_conf.get("osc2_octave", 0))
+                    inst.osc2_semitone = int(synth_conf.get("osc2_semitone", 0))
+                    inst.osc2_detune = float(synth_conf.get("osc2_detune", 0.0))
+                    inst.osc2_level = float(synth_conf.get("osc2_level", 0.5))
+                    inst.osc2_pwm = float(synth_conf.get("osc2_pwm", 0.5))
+                    # MIXER & SUB
+                    inst.osc_mix = float(synth_conf.get("osc_mix", 0.5))
+                    inst.sub_enabled = bool(synth_conf.get("sub_enabled", False))
+                    inst.sub_level = float(synth_conf.get("sub_level", 0.3))
+                    inst.sub_octave = int(synth_conf.get("sub_octave", -1))
+                    # UNISON
+                    inst.unison_enabled = bool(synth_conf.get("unison_enabled", False))
+                    inst.unison_voices = int(synth_conf.get("unison_voices", 3))
+                    inst.unison_detune = float(synth_conf.get("unison_detune", 10.0))
+                    inst.unison_spread = float(synth_conf.get("unison_spread", 0.5))
+                    # FILTER
+                    inst.filter_enabled = bool(synth_conf.get("filter_enabled", True))
+                    inst.filter_type = synth_conf.get("filter_type", 'lowpass')
+                    inst.filter_cutoff = float(synth_conf.get("filter_cutoff", 8000.0))
+                    inst.filter_resonance = float(synth_conf.get("filter_resonance", 0.7))
+                    inst.filter_envelope_amount = float(synth_conf.get("filter_envelope_amount", 0.0))
+                    # FILTER ENV
+                    inst.filter_attack = float(synth_conf.get("filter_attack", 0.01))
+                    inst.filter_decay = float(synth_conf.get("filter_decay", 0.1))
+                    inst.filter_sustain = float(synth_conf.get("filter_sustain", 0.5))
+                    inst.filter_release = float(synth_conf.get("filter_release", 0.2))
+                    # AMP ENV
+                    inst.attack = float(synth_conf.get("attack", 0.01))
+                    inst.decay = float(synth_conf.get("decay", 0.1))
+                    inst.sustain = float(synth_conf.get("sustain", 0.7))
+                    inst.release = float(synth_conf.get("release", 0.2))
+                    # GLIDE
+                    inst.glide_enabled = bool(synth_conf.get("glide_enabled", False))
+                    inst.glide_time = float(synth_conf.get("glide_time", 0.1))
+                    # LFO
+                    inst.lfo_enabled = bool(synth_conf.get("lfo_enabled", False))
+                    inst.lfo_rate = float(synth_conf.get("lfo_rate", 5.0))
+                    inst.lfo_type = synth_conf.get("lfo_type", 'sine')
+                    inst.lfo_amount = float(synth_conf.get("lfo_amount", 0.2))
+                    inst.lfo_target = synth_conf.get("lfo_target", 'pitch')
+                    # MASTER
+                    inst.volume = float(synth_conf.get("volume", 0.8))
+                elif Synthesizer:
+                    # Basic Synthesizer
+                    track.instrument = Synthesizer()
+                    inst = track.instrument
+                    inst.oscillator_type = synth_conf.get("oscillator_type", 'sine')
+                    inst.volume = float(synth_conf.get("volume", 1.0))
+                    inst.attack = float(synth_conf.get("attack", 0.005))
+                    inst.decay = float(synth_conf.get("decay", 0.05))
+                    inst.sustain = float(synth_conf.get("sustain", 0.7))
+                    inst.release = float(synth_conf.get("release", 0.1))
+            elif Synthesizer:
+                # No config, create basic Synthesizer
+                track.instrument = Synthesizer()
         
         # Restore effects chain if present
         try:
