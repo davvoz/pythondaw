@@ -1094,9 +1094,18 @@ def show_advanced_synth_editor(parent, synthesizer, track_name: str = "Advanced 
     
     # Enable mousewheel scrolling
     def on_mousewheel(event):
-        canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        # Check if canvas still exists
+        if canvas.winfo_exists():
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
     
     canvas.bind_all("<MouseWheel>", on_mousewheel)
+    
+    # Cleanup on window close
+    def on_close():
+        canvas.unbind_all("<MouseWheel>")
+        win.destroy()
+    
+    win.protocol("WM_DELETE_WINDOW", on_close)
     
     win.transient(parent)
     win.grab_set()
