@@ -15,7 +15,7 @@ from src.ui.waveform_editor import WaveformEditor
 FADE_SHAPES = ["linear", "exp", "log", "s-curve"]
 
 
-def show_midi_clip_info(parent, midi_clip, on_apply: Optional[Callable] = None, player=None):
+def show_midi_clip_info(parent, midi_clip, on_apply: Optional[Callable] = None, player=None, project=None):
     """Open Piano Roll editor directly for MIDI clip.
     
     Parameters:
@@ -23,6 +23,7 @@ def show_midi_clip_info(parent, midi_clip, on_apply: Optional[Callable] = None, 
         midi_clip: MidiClip instance
         on_apply: optional callback invoked when changes are made
         player: optional Player instance for playhead tracking
+        project: optional Project instance for BPM sync
     """
     if tk is None or ttk is None or parent is None or midi_clip is None:
         return
@@ -34,7 +35,7 @@ def show_midi_clip_info(parent, midi_clip, on_apply: Optional[Callable] = None, 
             if callable(on_apply):
                 on_apply(clip)
         
-        editor = PianoRollEditor(parent, midi_clip, on_apply=on_piano_apply, player=player)
+        editor = PianoRollEditor(parent, midi_clip, on_apply=on_piano_apply, player=player, project=project)
         editor.show()
     except Exception as e:
         print(f"Error opening Piano Roll: {e}")

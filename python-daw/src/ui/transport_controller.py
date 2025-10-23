@@ -214,7 +214,21 @@ class TransportController:
                     for track_idx, clip in self.timeline.all_placements():
                         start_bars = self.project.seconds_to_bars(clip.start_time)
                         duration_bars = self.project.seconds_to_bars(clip.length_seconds)
-                        clip_positions.append((track_idx, clip, start_bars, duration_bars))
+                        
+                        # For MIDI clips, also store note timings in musical time
+                        note_timings = []
+                        try:
+                            from src.midi.clip import MidiClip
+                            if isinstance(clip, MidiClip):
+                                notes = getattr(clip, 'notes', []) or []
+                                for note in notes:
+                                    note_start_bars = self.project.seconds_to_bars(note.start)
+                                    note_duration_bars = self.project.seconds_to_bars(note.duration)
+                                    note_timings.append((note, note_start_bars, note_duration_bars))
+                        except Exception:
+                            pass
+                        
+                        clip_positions.append((track_idx, clip, start_bars, duration_bars, note_timings))
                 except Exception as e:
                     print(f"Error storing clip positions: {e}")
             
@@ -223,7 +237,7 @@ class TransportController:
             
             # Convert clip positions back to seconds with new BPM
             clips_adjusted = 0
-            for track_idx, clip, start_bars, duration_bars in clip_positions:
+            for track_idx, clip, start_bars, duration_bars, note_timings in clip_positions:
                 try:
                     new_start_time = self.project.bars_to_seconds(start_bars)
                     new_duration = self.project.bars_to_seconds(duration_bars)
@@ -233,6 +247,12 @@ class TransportController:
                     # Only update duration if it was explicitly set (not derived from buffer)
                     if clip.duration is not None:
                         clip.duration = new_duration
+                    
+                    # Scale MIDI notes if present
+                    if note_timings:
+                        for note, note_start_bars, note_duration_bars in note_timings:
+                            note.start = self.project.bars_to_seconds(note_start_bars)
+                            note.duration = self.project.bars_to_seconds(note_duration_bars)
                     
                     clips_adjusted += 1
                 except Exception as e:

@@ -61,7 +61,7 @@ class PianoRollEditor:
         "Off": 0.0
     }
 
-    def __init__(self, parent, midi_clip, on_apply=None, px_per_sec=200, pitch_min=21, pitch_max=108, player=None):
+    def __init__(self, parent, midi_clip, on_apply=None, px_per_sec=200, pitch_min=21, pitch_max=108, player=None, project=None):
         self.parent = parent
         self.clip = midi_clip
         self.on_apply = on_apply
@@ -70,21 +70,12 @@ class PianoRollEditor:
         self.pitch_max = int(pitch_max)
         # Optional player reference to track playback time
         self._player = player
+        # Reference to project for BPM updates
+        self._project = project
         
         # Grid and snap settings
         self.snap_value = 0.25  # Default 1/4 note
         self.snap_enabled = True
-        
-        # Get BPM from clip or use default
-        self.bpm = 120.0
-        try:
-            if hasattr(midi_clip, 'bpm') and midi_clip.bpm:
-                self.bpm = float(midi_clip.bpm)
-            elif hasattr(midi_clip, 'project') and midi_clip.project and hasattr(midi_clip.project, 'bpm'):
-                self.bpm = float(midi_clip.project.bpm)
-        except Exception as e:
-            print(f"Warning: Could not get BPM from clip, using default 120: {e}")
-            self.bpm = 120.0
         
         # UI state
         self._win = None
@@ -130,6 +121,36 @@ class PianoRollEditor:
         
         # Headplay (audio preview)
         self._headplay_enabled = True
+        
+    def _get_current_bpm(self) -> float:
+        """Get current BPM from project (live) or fallback to default."""
+        try:
+            if self._project and hasattr(self._project, 'bpm'):
+                bpm = float(self._project.bpm)
+                # Debug: print when BPM is read
+                # print(f"Piano Roll reading BPM: {bpm}")
+                return bpm
+            if hasattr(self.clip, 'project') and self.clip.project and hasattr(self.clip.project, 'bpm'):
+                bpm = float(self.clip.project.bpm)
+                # print(f"Piano Roll reading BPM from clip.project: {bpm}")
+                return bpm
+        except Exception as e:
+            # print(f"Error reading BPM: {e}")
+            pass
+        return 120.0  # Fallback default
+    
+    def _get_bar_duration(self) -> float:
+        """Get bar duration in seconds from project (considers time signature)."""
+        try:
+            if self._project and hasattr(self._project, 'get_bar_duration'):
+                return float(self._project.get_bar_duration())
+            if hasattr(self.clip, 'project') and self.clip.project and hasattr(self.clip.project, 'get_bar_duration'):
+                return float(self.clip.project.get_bar_duration())
+        except Exception:
+            pass
+        # Fallback: 4/4 at 120 BPM = 2 seconds per bar
+        bpm = self._get_current_bpm()
+        return (60.0 / bpm) * 4.0
         
     def _schedule_redraw(self):
         """Schedule a redraw with throttling for performance."""
@@ -183,6 +204,23 @@ class PianoRollEditor:
         """Create and display the piano roll window."""
         if tk is None:
             return
+        
+        # Debug: print clip and project info
+        print(f"\n=== PIANO ROLL OPENED ===")
+        print(f"Clip: {getattr(self.clip, 'name', 'Unknown')}")
+        print(f"Clip start_time: {getattr(self.clip, 'start_time', 'N/A')}")
+        print(f"Clip duration: {getattr(self.clip, 'duration', 'N/A')}")
+        print(f"Project BPM: {self._get_current_bpm()}")
+        print(f"Bar duration: {self._get_bar_duration():.3f}s")
+        notes = getattr(self.clip, 'notes', []) or []
+        print(f"Total notes: {len(notes)}")
+        if notes:
+            print(f"  Note 1: start={notes[0].start:.3f}s, dur={notes[0].duration:.3f}s, pitch={notes[0].pitch}")
+            if len(notes) > 1:
+                print(f"  Note 2: start={notes[1].start:.3f}s, dur={notes[1].duration:.3f}s, pitch={notes[1].pitch}")
+            if len(notes) > 2:
+                print(f"  Note {len(notes)}: start={notes[-1].start:.3f}s, dur={notes[-1].duration:.3f}s, pitch={notes[-1].pitch}")
+        print(f"========================\n")
         
         try:
             self._win = tk.Toplevel(self.parent)
@@ -505,13 +543,29 @@ class PianoRollEditor:
     # =============================================================================
     
     def _content_size(self):
-        """Calculate canvas content size."""
+        """Calculate canvas content size based on actual notes extent and musical bars."""
         try:
-            clip_length = float(getattr(self.clip, 'length_seconds', 4.0))
-        except:
-            clip_length = 4.0
+            # Start with clip's declared length in seconds
+            clip_length = float(getattr(self.clip, 'duration', 4.0) or 4.0)
+            
+            # Expand to include all notes
+            notes = getattr(self.clip, 'notes', []) or []
+            if notes:
+                # Find the rightmost note
+                max_note_end = max((n.start + n.duration for n in notes), default=0.0)
+                clip_length = max(clip_length, max_note_end)
+            
+            # Get bar duration from project (considers time signature correctly)
+            seconds_per_bar = self._get_bar_duration()
+            
+            # Round up to complete bars and add padding of 2 bars
+            bars_needed = int((clip_length / seconds_per_bar) + 0.999)  # Round up
+            total_bars = bars_needed + 2  # Add 2 bars padding
+            total_width = total_bars * seconds_per_bar
+        except Exception:
+            total_width = 8.0
         
-        w = max(1200, int(clip_length * self.px_per_sec * self.zoom_level))
+        w = max(1200, int(total_width * self.px_per_sec * self.zoom_level))
         rows = self.pitch_max - self.pitch_min + 1
         h = max(400, rows * self.NOTE_HEIGHT)
         return w, h
@@ -563,8 +617,19 @@ class PianoRollEditor:
         )
     
     def update_playhead(self, time: float):
-        """Update playhead position during playback."""
-        self._playhead_time = time
+        """Update playhead position during playback.
+        
+        Args:
+            time: Absolute time from timeline player
+        """
+        # Convert from absolute timeline time to clip-local time
+        clip_start = float(getattr(self.clip, 'start_time', 0.0))
+        clip_local_time = time - clip_start
+        
+        # Debug
+        print(f"Playhead: absolute={time:.3f}s, clip_start={clip_start:.3f}s, local={clip_local_time:.3f}s, BPM={self._get_current_bpm()}")
+        
+        self._playhead_time = clip_local_time
         
         # Redraw only playhead for performance
         if self._canvas and self._playhead_line:
@@ -579,7 +644,7 @@ class PianoRollEditor:
         # Update ruler playhead too
         if self._ruler_canvas:
             self._ruler_canvas.delete("playhead")
-            playhead_x = self._time_to_x(time)
+            playhead_x = self._time_to_x(clip_local_time)
             self._ruler_canvas.create_line(playhead_x, 0, playhead_x, self.RULER_HEIGHT,
                                           fill="#ef4444", width=2, tags="playhead")
             self._ruler_canvas.create_polygon(
@@ -624,9 +689,30 @@ class PianoRollEditor:
                 self._canvas.create_line(visible_x_start, y, visible_x_end, y, fill="#3a3a3a", width=2)
         
         # Vertical lines (time grid) - bars, beats, and snap subdivisions
-        seconds_per_beat = 60.0 / self.bpm
+        seconds_per_beat = 60.0 / self._get_current_bpm()
+        
+        # Get beats per bar from project time signature
+        beats_per_bar = 4  # Default 4/4
         try:
-            total_secs = float(getattr(self.clip, 'length_seconds', 4.0)) + 4
+            if self._project and hasattr(self._project, 'time_signature_num'):
+                beats_per_bar = int(self._project.time_signature_num)
+            elif hasattr(self.clip, 'project') and hasattr(self.clip.project, 'time_signature_num'):
+                beats_per_bar = int(self.clip.project.time_signature_num)
+        except Exception:
+            pass
+        
+        seconds_per_bar = seconds_per_beat * beats_per_bar
+        
+        try:
+            clip_length = float(getattr(self.clip, 'duration', 4.0) or 4.0)
+            notes = getattr(self.clip, 'notes', []) or []
+            if notes:
+                max_note_end = max((n.start + n.duration for n in notes), default=0.0)
+                clip_length = max(clip_length, max_note_end)
+            seconds_per_bar = self._get_bar_duration()
+            bars_needed = int((clip_length / seconds_per_bar) + 0.999)
+            total_bars = bars_needed + 2
+            total_secs = total_bars * seconds_per_bar
         except:
             total_secs = 8.0
         
@@ -643,8 +729,8 @@ class PianoRollEditor:
                 t = snap_idx * snap_seconds
                 x = self._time_to_x(t)
                 
-                # Check if this is a bar (every 4 beats)
-                is_bar = abs(t % (4 * seconds_per_beat)) < 0.001
+                # Check if this is a bar (every beats_per_bar beats)
+                is_bar = abs(t % seconds_per_bar) < 0.001
                 # Check if this is a beat
                 is_beat = abs(t % seconds_per_beat) < 0.001
                 
@@ -825,14 +911,32 @@ class PianoRollEditor:
         self._ruler_canvas.configure(scrollregion=(0, 0, width, self.RULER_HEIGHT))
         self._ruler_canvas.xview_moveto(x_view[0])
         
-        # Calculate beats per second
-        beats_per_minute = self.bpm
+        # Calculate beats per second - ALWAYS use current project BPM
+        beats_per_minute = self._get_current_bpm()
         beats_per_second = beats_per_minute / 60.0
         seconds_per_beat = 60.0 / beats_per_minute
         
-        # Draw beat markers
+        # Get beats per bar from project time signature
+        beats_per_bar = 4  # Default 4/4
         try:
-            total_secs = float(getattr(self.clip, 'length_seconds', 4.0)) + 4
+            if self._project and hasattr(self._project, 'time_signature_num'):
+                beats_per_bar = int(self._project.time_signature_num)
+            elif hasattr(self.clip, 'project') and hasattr(self.clip.project, 'time_signature_num'):
+                beats_per_bar = int(self.clip.project.time_signature_num)
+        except Exception:
+            pass
+        
+        # Calculate total bars to display (match canvas size calculation)
+        try:
+            clip_length = float(getattr(self.clip, 'duration', 4.0) or 4.0)
+            notes = getattr(self.clip, 'notes', []) or []
+            if notes:
+                max_note_end = max((n.start + n.duration for n in notes), default=0.0)
+                clip_length = max(clip_length, max_note_end)
+            seconds_per_bar = self._get_bar_duration()
+            bars_needed = int((clip_length / seconds_per_bar) + 0.999)
+            total_bars = bars_needed + 2
+            total_secs = total_bars * seconds_per_bar
         except:
             total_secs = 8.0
         total_beats = int(total_secs * beats_per_second) + 1
@@ -841,15 +945,15 @@ class PianoRollEditor:
             t = beat_idx * seconds_per_beat
             x = self._time_to_x(t)
             
-            # Every 4 beats is a bar
-            is_bar = (beat_idx % 4) == 0
+            # Check if this is a bar (every beats_per_bar beats)
+            is_bar = (beat_idx % beats_per_bar) == 0
             
             if is_bar:
                 # Bar marker - taller and thicker
                 self._ruler_canvas.create_line(x, 0, x, self.RULER_HEIGHT,
                                               fill="#3b82f6", width=2)
                 # Bar number
-                bar_num = (beat_idx // 4) + 1
+                bar_num = (beat_idx // beats_per_bar) + 1
                 self._ruler_canvas.create_text(x + 3, 3, text=f"{bar_num}", anchor="nw",
                                               fill="#f5f5f5", font=("Segoe UI", 8, "bold"))
             else:
@@ -857,7 +961,7 @@ class PianoRollEditor:
                 self._ruler_canvas.create_line(x, self.RULER_HEIGHT - 8, x, self.RULER_HEIGHT,
                                               fill="#6b7280", width=1)
                 # Beat number within bar
-                beat_in_bar = (beat_idx % 4) + 1
+                beat_in_bar = (beat_idx % beats_per_bar) + 1
                 self._ruler_canvas.create_text(x + 2, self.RULER_HEIGHT - 18, text=f".{beat_in_bar}",
                                               anchor="nw", fill="#9ca3af", font=("Segoe UI", 7))
         

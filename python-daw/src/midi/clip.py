@@ -34,13 +34,23 @@ class MidiClip:
 
     @property
     def length_seconds(self) -> float:
-        if self.duration is not None:
-            return float(self.duration)
-        # derive from notes
-        if not self.notes:
-            return 0.0
-        last_end = max((n.end for n in self.notes), default=0.0)
-        return float(last_end)
+        """Return the effective length considering both duration and notes.
+        
+        Returns the maximum between:
+        - Explicit duration (if set)
+        - Last note end time (if notes exist)
+        This ensures the clip is always long enough to contain all notes.
+        """
+        explicit_duration = float(self.duration) if self.duration is not None else 0.0
+        
+        # Calculate duration from notes
+        notes_duration = 0.0
+        if self.notes:
+            last_end = max((n.end for n in self.notes), default=0.0)
+            notes_duration = float(last_end)
+        
+        # Return the maximum to ensure clip contains all content
+        return max(explicit_duration, notes_duration)
 
     @property
     def end_time(self) -> float:

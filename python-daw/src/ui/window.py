@@ -618,7 +618,7 @@ class MainWindow:
                 pass
 
         try:
-            editor = PianoRollEditor(self._root, clip, on_apply=_on_apply, player=self.player)
+            editor = PianoRollEditor(self._root, clip, on_apply=_on_apply, player=self.player, project=self.project)
             editor.show()
         except Exception as e:
             print(f"Failed to open Piano Roll: {e}")
