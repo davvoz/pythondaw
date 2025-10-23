@@ -375,9 +375,18 @@ class ProjectSerializer:
                     notes.append(MidiNote(int(nd.get("pitch", 60)), float(nd.get("start", 0.0)), float(nd.get("duration", 0.25)), int(nd.get("velocity", 100))))
                 except Exception:
                     continue
+            
+            # For existing clips with notes: ignore saved duration, calculate from notes
+            # For empty clips: keep saved duration if present
+            # This ensures clips with notes always match their content exactly
+            loaded_duration = data.get("duration")
+            if notes:
+                # Has notes: ignore duration, will be calculated from notes
+                loaded_duration = None
+            
             clip = MidiClip(
                 name=data["name"], notes=notes, start_time=data["start_time"],
-                duration=data.get("duration"), color=data.get("color"),
+                duration=loaded_duration, color=data.get("color"),
                 instrument=None, sample_rate=data.get("sample_rate", 44100)
             )
             clip.selected = data.get("selected", False)

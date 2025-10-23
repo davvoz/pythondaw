@@ -379,7 +379,24 @@ class TrackClipManager:
             
             # Empty notes list - user will add notes via Piano Roll
             notes = []
-            mclip = MidiClip(name="MIDI Clip", notes=notes, start_time=cur, duration=4.0, color="#22c55e", instrument=instrument)
+            
+            # Set initial duration to 1 bar (musical time) based on current BPM
+            # This ensures new clips have a reasonable size regardless of tempo
+            initial_duration_bars = 1.0  # 1 bar
+            if self.project:
+                initial_duration = self.project.bars_to_seconds(initial_duration_bars)
+            else:
+                # Fallback: assume 120 BPM, 4/4 time = 2 seconds per bar
+                initial_duration = 2.0
+            
+            mclip = MidiClip(
+                name="MIDI Clip", 
+                notes=notes, 
+                start_time=cur, 
+                duration=initial_duration,  # Set to 1 bar in seconds
+                color="#22c55e", 
+                instrument=instrument
+            )
             
             self.timeline.add_clip(track_idx, mclip)
             if self._timeline_canvas:
@@ -929,4 +946,4 @@ Samples: {len(clip.buffer)}
             if self._timeline_canvas:
                 self._timeline_canvas.redraw()
 
-        show_clip_inspector(self.window._root, clip, on_apply=on_apply, player=self.player)
+        show_clip_inspector(self.window._root, clip, on_apply=on_apply, player=self.player, project=self.window.project)

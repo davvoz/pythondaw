@@ -205,21 +205,33 @@ class PianoRollEditor:
         if tk is None:
             return
         
+        # Reset state variables to ensure clean start
+        self._is_drawing = False
+        self._playhead_time = 0.0
+        self._playhead_line = None
+        self._playhead_job = None
+        self._notes_ids = {}
+        self._selected_notes = []
+        self.zoom_level = 1.0
+        
         # Debug: print clip and project info
-        print(f"\n=== PIANO ROLL OPENED ===")
+        print(f"\n=== PIANO ROLL DEBUG ===")
         print(f"Clip: {getattr(self.clip, 'name', 'Unknown')}")
         print(f"Clip start_time: {getattr(self.clip, 'start_time', 'N/A')}")
         print(f"Clip duration: {getattr(self.clip, 'duration', 'N/A')}")
+        print(f"Project object: {self._project}")
         print(f"Project BPM: {self._get_current_bpm()}")
-        print(f"Bar duration: {self._get_bar_duration():.3f}s")
+        if self._project:
+            print(f"Project.bpm direct: {getattr(self._project, 'bpm', 'N/A')}")
+        print(f"Bar duration: {self._get_bar_duration()}")
+        print(f"px_per_sec: {self.px_per_sec}")
+        print(f"zoom_level: {self.zoom_level}")
+        print(f"px_per_sec * zoom: {self.px_per_sec * self.zoom_level}")
         notes = getattr(self.clip, 'notes', []) or []
-        print(f"Total notes: {len(notes)}")
         if notes:
-            print(f"  Note 1: start={notes[0].start:.3f}s, dur={notes[0].duration:.3f}s, pitch={notes[0].pitch}")
+            print(f"First note: start={notes[0].start}, duration={notes[0].duration}, pitch={notes[0].pitch}")
             if len(notes) > 1:
-                print(f"  Note 2: start={notes[1].start:.3f}s, dur={notes[1].duration:.3f}s, pitch={notes[1].pitch}")
-            if len(notes) > 2:
-                print(f"  Note {len(notes)}: start={notes[-1].start:.3f}s, dur={notes[-1].duration:.3f}s, pitch={notes[-1].pitch}")
+                print(f"Last note: start={notes[-1].start}, duration={notes[-1].duration}, pitch={notes[-1].pitch}")
         print(f"========================\n")
         
         try:
@@ -488,6 +500,34 @@ class PianoRollEditor:
         except Exception:
             pass
         self._playhead_job = None
+        
+        # Calculate clip duration from notes in musical time (bars)
+        # This ensures it scales correctly when BPM changes
+        if self.clip is not None and self._project is not None:
+            try:
+                notes = getattr(self.clip, 'notes', []) or []
+                if notes:
+                    # Find rightmost note end in seconds
+                    max_note_end = max((n.start + n.duration for n in notes), default=0.0)
+                    
+                    # Convert to bars
+                    bar_duration = self._get_bar_duration()
+                    duration_in_bars = max_note_end / bar_duration
+                    
+                    # Round up to next 1/4 bar (quarter note precision)
+                    duration_in_bars = round(duration_in_bars * 4) / 4.0
+                    
+                    # Convert back to seconds at current BPM
+                    self.clip.duration = self._project.bars_to_seconds(duration_in_bars)
+                    
+                    print(f"Piano Roll closed: clip duration set to {duration_in_bars:.2f} bars ({self.clip.duration:.3f}s)")
+                else:
+                    # Empty clip: set to 1 bar
+                    self.clip.duration = self._project.bars_to_seconds(1.0)
+            except Exception as e:
+                print(f"Error setting clip duration: {e}")
+                self.clip.duration = None
+        
         if callable(self.on_apply):
             try:
                 self.on_apply(self.clip)
@@ -562,7 +602,11 @@ class PianoRollEditor:
             bars_needed = int((clip_length / seconds_per_bar) + 0.999)  # Round up
             total_bars = bars_needed + 2  # Add 2 bars padding
             total_width = total_bars * seconds_per_bar
-        except Exception:
+            
+            # Debug
+            print(f"_content_size: clip_length={clip_length:.3f}, bars={total_bars}, total_width={total_width:.3f}, zoom={self.zoom_level}")
+        except Exception as e:
+            print(f"_content_size error: {e}")
             total_width = 8.0
         
         w = max(1200, int(total_width * self.px_per_sec * self.zoom_level))
@@ -626,9 +670,6 @@ class PianoRollEditor:
         clip_start = float(getattr(self.clip, 'start_time', 0.0))
         clip_local_time = time - clip_start
         
-        # Debug
-        print(f"Playhead: absolute={time:.3f}s, clip_start={clip_start:.3f}s, local={clip_local_time:.3f}s, BPM={self._get_current_bpm()}")
-        
         self._playhead_time = clip_local_time
         
         # Redraw only playhead for performance
@@ -661,6 +702,10 @@ class PianoRollEditor:
         
     def _draw_grid(self, width, height):
         """Draw the background grid - optimized to draw only visible area."""
+        # Debug: print BPM every time we draw grid
+        current_bpm = self._get_current_bpm()
+        print(f"[GRID] Drawing grid with BPM: {current_bpm}")
+        
         # Get visible area
         try:
             x_view = self._canvas.xview()
@@ -906,10 +951,13 @@ class PianoRollEditor:
             
         self._ruler_canvas.delete("all")
         
-        # Sync horizontal scroll with main canvas
-        x_view = self._canvas.xview()
+        # Configure scrollregion BEFORE syncing scroll position
         self._ruler_canvas.configure(scrollregion=(0, 0, width, self.RULER_HEIGHT))
-        self._ruler_canvas.xview_moveto(x_view[0])
+        
+        # Sync horizontal scroll with main canvas
+        if self._canvas:
+            x_view = self._canvas.xview()
+            self._ruler_canvas.xview_moveto(x_view[0])
         
         # Calculate beats per second - ALWAYS use current project BPM
         beats_per_minute = self._get_current_bpm()

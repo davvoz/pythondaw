@@ -215,20 +215,12 @@ class TransportController:
                         start_bars = self.project.seconds_to_bars(clip.start_time)
                         duration_bars = self.project.seconds_to_bars(clip.length_seconds)
                         
-                        # For MIDI clips, also store note timings in musical time
-                        note_timings = []
-                        try:
-                            from src.midi.clip import MidiClip
-                            if isinstance(clip, MidiClip):
-                                notes = getattr(clip, 'notes', []) or []
-                                for note in notes:
-                                    note_start_bars = self.project.seconds_to_bars(note.start)
-                                    note_duration_bars = self.project.seconds_to_bars(note.duration)
-                                    note_timings.append((note, note_start_bars, note_duration_bars))
-                        except Exception:
-                            pass
+                        # NOTE: MIDI notes are clip-local (relative to clip start)
+                        # They should NOT be scaled when BPM changes because they represent
+                        # musical positions that are independent of the project tempo
+                        # Only the clip position on timeline and clip duration are scaled
                         
-                        clip_positions.append((track_idx, clip, start_bars, duration_bars, note_timings))
+                        clip_positions.append((track_idx, clip, start_bars, duration_bars))
                 except Exception as e:
                     print(f"Error storing clip positions: {e}")
             
@@ -237,10 +229,13 @@ class TransportController:
             
             # Convert clip positions back to seconds with new BPM
             clips_adjusted = 0
-            for track_idx, clip, start_bars, duration_bars, note_timings in clip_positions:
+            for track_idx, clip, start_bars, duration_bars in clip_positions:
                 try:
                     new_start_time = self.project.bars_to_seconds(start_bars)
                     new_duration = self.project.bars_to_seconds(duration_bars)
+                    
+                    # Calculate scale factor for note timing
+                    scale_factor = new_bpm / old_bpm
                     
                     # Update clip timing
                     clip.start_time = new_start_time
@@ -248,11 +243,18 @@ class TransportController:
                     if clip.duration is not None:
                         clip.duration = new_duration
                     
-                    # Scale MIDI notes if present
-                    if note_timings:
-                        for note, note_start_bars, note_duration_bars in note_timings:
-                            note.start = self.project.bars_to_seconds(note_start_bars)
-                            note.duration = self.project.bars_to_seconds(note_duration_bars)
+                    # For MIDI clips: scale note timings to maintain musical positions
+                    # Notes are in clip-local time (seconds), so when BPM changes,
+                    # we need to scale them to maintain the same musical position
+                    try:
+                        from src.midi.clip import MidiClip
+                        if isinstance(clip, MidiClip):
+                            for note in clip.notes:
+                                # Scale note timing: faster BPM = shorter seconds
+                                note.start = note.start / scale_factor
+                                note.duration = note.duration / scale_factor
+                    except Exception as e:
+                        print(f"Error scaling MIDI notes: {e}")
                     
                     clips_adjusted += 1
                 except Exception as e:

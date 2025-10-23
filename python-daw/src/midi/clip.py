@@ -39,7 +39,9 @@ class MidiClip:
         Returns the maximum between:
         - Explicit duration (if set)
         - Last note end time (if notes exist)
-        This ensures the clip is always long enough to contain all notes.
+        
+        Note: For empty clips, returns 0.0. The UI/timeline should handle
+        minimum visual size separately, ideally in musical time (beats/bars).
         """
         explicit_duration = float(self.duration) if self.duration is not None else 0.0
         
@@ -49,7 +51,7 @@ class MidiClip:
             last_end = max((n.end for n in self.notes), default=0.0)
             notes_duration = float(last_end)
         
-        # Return the maximum to ensure clip contains all content
+        # Return the maximum - no artificial minimum in seconds
         return max(explicit_duration, notes_duration)
 
     @property

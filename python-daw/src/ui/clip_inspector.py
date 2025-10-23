@@ -43,7 +43,7 @@ def show_midi_clip_info(parent, midi_clip, on_apply: Optional[Callable] = None, 
         traceback.print_exc()
 
 
-def show_clip_inspector(parent, clip: AudioClip, on_apply: Optional[Callable[[AudioClip], None]] = None, player=None):
+def show_clip_inspector(parent, clip: AudioClip, on_apply: Optional[Callable[[AudioClip], None]] = None, player=None, project=None):
     """Open a small editor for a single AudioClip with real-time updates.
 
     Parameters:
@@ -51,6 +51,7 @@ def show_clip_inspector(parent, clip: AudioClip, on_apply: Optional[Callable[[Au
         clip: AudioClip instance to edit (in-place)
         on_apply: optional callback invoked when properties change (for live updates)
         player: optional Player instance for playhead tracking in Piano Roll
+        project: optional Project instance for BPM sync in Piano Roll
     """
     if tk is None or ttk is None or parent is None or clip is None:
         return
@@ -58,7 +59,7 @@ def show_clip_inspector(parent, clip: AudioClip, on_apply: Optional[Callable[[Au
     # Check if this is a MIDI clip - if so, show different editor
     if isinstance(clip, MidiClip):
         # For MIDI clips, just show a simple message and open piano roll
-        show_midi_clip_info(parent, clip, on_apply, player=player)
+        show_midi_clip_info(parent, clip, on_apply, player=player, project=project)
         return
 
     win = tk.Toplevel(parent)
