@@ -79,29 +79,7 @@ class MenuManager:
             label="Export Audio...",
             command=self.callbacks.get('export_audio', lambda: None),
             accelerator="Ctrl+E"
-        )
-        
-        # Recent files submenu
-        recent_menu = tk.Menu(
-            file_menu, tearoff=0, bg="#2d2d2d", fg="#f5f5f5",
-            activebackground="#3b82f6", activeforeground="#ffffff"
-        )
-        
-        # Get recent files from callback if available
-        recent_files = self.callbacks.get('get_recent_files', lambda: [])()
-        
-        if recent_files:
-            for i, file_path in enumerate(recent_files[:10]):  # Max 10 recent files
-                import os
-                filename = os.path.basename(file_path)
-                recent_menu.add_command(
-                    label=f"{i+1}. {filename}",
-                    command=lambda fp=file_path: self.callbacks.get('import_recent', lambda x: None)(fp)
-                )
-        else:
-            recent_menu.add_command(label="(No recent files)", state="disabled")
-        
-        file_menu.add_cascade(label="Recent Files", menu=recent_menu)
+        )      
         
         file_menu.add_separator()
         file_menu.add_command(
