@@ -81,6 +81,9 @@ def main():
 
     # Real-time player (graceful fallback if sounddevice/numpy are missing)
     player = TimelinePlayer(timeline, sample_rate=sr, mixer=mixer, project=project)
+    
+    # Connect mixer to player for cache invalidation (PERFORMANCE)
+    mixer.set_player(player)
 
     # Set up the main user interface
     transport = Transport()

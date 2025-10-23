@@ -21,7 +21,7 @@ class TimelinePlayer:
     Gracefully degrades if sounddevice/numpy is missing.
     """
 
-    def __init__(self, timeline, sample_rate: int = 44100, block_size: int = 512, mixer=None, project=None):
+    def __init__(self, timeline, sample_rate: int = 44100, block_size: int = 4096, mixer=None, project=None):
         self.timeline = timeline
         self.sample_rate = int(sample_rate)
         self.block_size = int(block_size)
@@ -38,6 +38,14 @@ class TimelinePlayer:
         self._loop_enabled = False
         self._loop_start = 0.0
         self._loop_end = 4.0  # default 4 seconds
+        
+        # PERFORMANCE: Cache track state per evitare lookup ripetuti
+        self._track_state_cache = {}
+        self._cache_valid = False
+        self._cached_master_volume = 1.0
+        
+        # PERFORMANCE: Flag per disabilitare effetti in real-time
+        self._realtime_effects_enabled = False  # Cambia a True se vuoi effetti in RT
 
     def start(self, start_time: float = 0.0):
         if sd is None or np is None:
@@ -103,47 +111,162 @@ class TimelinePlayer:
         with self._lock:
             return self._current_time
 
+    def invalidate_cache(self):
+        """Call this when mute/solo/volume/pan changes."""
+        self._cache_valid = False
+    
+    def _update_track_cache(self):
+        """Update cache of track state (PERFORMANCE OPTIMIZATION)."""
+        import math
+        self._track_state_cache = {}
+        
+        if self.project is not None and hasattr(self.project, 'tracks'):
+            for idx in range(len(self.project.tracks)):
+                should_play = True
+                if self.mixer is not None and hasattr(self.mixer, 'should_play_track'):
+                    should_play = self.mixer.should_play_track(idx)
+                
+                gain = 1.0
+                pan = 0.0
+                if self.mixer is not None and hasattr(self.mixer, "get_track"):
+                    tr = self.mixer.get_track(idx)
+                    if tr is not None:
+                        gain = float(tr.get("volume", 1.0))
+                        pan = float(tr.get("pan", 0.0))
+                
+                # Pre-calculate stereo gain (equal-power pan)
+                angle = (pan + 1) * (math.pi / 4)
+                gL = math.cos(angle) * gain
+                gR = math.sin(angle) * gain
+                
+                self._track_state_cache[idx] = {
+                    'should_play': should_play,
+                    'gainL': gL,
+                    'gainR': gR,
+                }
+        
+        # Master volume
+        if self.mixer is not None:
+            self._cached_master_volume = float(getattr(self.mixer, "master_volume", 1.0))
+        else:
+            self._cached_master_volume = 1.0
+        
+        self._cache_valid = True
+
     # ----- internal -----
     def _callback(self, outdata, frames, time, status):  # pragma: no cover - realtime
         if status:
             print(f"Audio status: {status}")
+        
+        # Update cache if invalid (PERFORMANCE)
+        if not self._cache_valid:
+            self._update_track_cache()
+        
         # Prepare stereo output buffer
         outL = np.zeros(frames, dtype=np.float32)
         outR = np.zeros(frames, dtype=np.float32)
+        
         with self._lock:
             start_t = self._current_time
-        end_t = start_t + frames / float(self.sample_rate)
+            loop_enabled = self._loop_enabled
+            loop_start = self._loop_start
+            loop_end = self._loop_end
+        
+        frames_remaining = frames
+        output_offset = 0
+        
+        # Process in chunks, handling loop wraparound seamlessly
+        while frames_remaining > 0:
+            end_t = start_t + frames_remaining / float(self.sample_rate)
+            
+            # Check if we hit loop end
+            if loop_enabled and start_t < loop_end and end_t > loop_end:
+                # Process only up to loop end
+                frames_to_process = max(1, int((loop_end - start_t) * self.sample_rate))
+                frames_to_process = min(frames_to_process, frames_remaining)
+                actual_end_t = loop_end
+            else:
+                frames_to_process = frames_remaining
+                actual_end_t = end_t
+            
+            # Process this chunk
+            chunk_outL, chunk_outR = self._process_chunk(start_t, actual_end_t, frames_to_process)
+            outL[output_offset:output_offset + frames_to_process] = chunk_outL
+            outR[output_offset:output_offset + frames_to_process] = chunk_outR
+            
+            output_offset += frames_to_process
+            frames_remaining -= frames_to_process
+            
+            # Handle loop wraparound
+            if loop_enabled and actual_end_t >= loop_end:
+                # Loop back to start and continue processing remaining frames
+                start_t = loop_start
+            else:
+                # Advance normally
+                start_t = actual_end_t
+        
+        # Master volume (from cache - PERFORMANCE)
+        outL *= self._cached_master_volume
+        outR *= self._cached_master_volume
 
-        # Group clips by track (same as render_window for effects)
+        # clamp
+        np.clip(outL, -1.0, 1.0, out=outL)
+        np.clip(outR, -1.0, 1.0, out=outR)
+        outdata[:, 0] = outL
+        outdata[:, 1] = outR
+
+        # Update current time
+        with self._lock:
+            self._current_time = start_t
+            # update peaks for UI
+            try:
+                self._last_peak_L = float(np.max(np.abs(outL)))
+                self._last_peak_R = float(np.max(np.abs(outR)))
+            except Exception:
+                self._last_peak_L = 0.0
+                self._last_peak_R = 0.0
+
+    def _process_chunk(self, start_t, end_t, frames):
+        """Process a single chunk of audio (extracted from _callback for loop handling)."""
+        import math
+        
+        outL = np.zeros(frames, dtype=np.float32)
+        outR = np.zeros(frames, dtype=np.float32)
+        
+        # Group clips by track
         track_clips = {}
         for track_index, clip in self.timeline.get_clips_for_range(start_t, end_t):
-            # Check mute/solo state
-            if self.mixer is not None and hasattr(self.mixer, 'should_play_track'):
+            # Use cache for mute/solo check (PERFORMANCE)
+            if track_index in self._track_state_cache:
+                if not self._track_state_cache[track_index]['should_play']:
+                    continue
+            elif self.mixer is not None and hasattr(self.mixer, 'should_play_track'):
                 if not self.mixer.should_play_track(track_index):
-                    continue  # Skip this track
+                    continue
             
             if track_index not in track_clips:
                 track_clips[track_index] = []
             track_clips[track_index].append(clip)
-        # Determine which tracks to process this block:
-        # - all tracks that have clips in this block
-        # - plus any audible tracks from project (to keep FX tails running)
+        
+        # Determine which tracks to process
         tracks_to_process = set(track_clips.keys())
         if self.project is not None and hasattr(self.project, 'tracks'):
             try:
                 for idx in range(len(self.project.tracks)):
-                    # honor mute/solo if mixer provided
-                    if self.mixer is not None and hasattr(self.mixer, 'should_play_track'):
+                    # Use cache (PERFORMANCE)
+                    if idx in self._track_state_cache:
+                        if not self._track_state_cache[idx]['should_play']:
+                            continue
+                    elif self.mixer is not None and hasattr(self.mixer, 'should_play_track'):
                         if not self.mixer.should_play_track(idx):
                             continue
                     tracks_to_process.add(idx)
             except Exception:
                 pass
 
-        # Process each track separately (render clips if any, apply effects, then pan/mix)
+        # Process each track
         for track_index in sorted(tracks_to_process):
             clips = track_clips.get(track_index, [])
-            # Create mono buffer for this track
             track_mono = np.zeros(frames, dtype=np.float32)
             
             # Mix all clips of this track
@@ -170,8 +293,8 @@ class TimelinePlayer:
                 # Mix into track buffer (clips already have their volume applied)
                 track_mono[out_start:out_start + seg_len] += seg[:seg_len]
             
-            # Apply per-track effects (if project available)
-            if self.project is not None and hasattr(self.project, 'tracks'):
+            # Apply per-track effects (OPTIONAL - can be disabled for performance)
+            if self._realtime_effects_enabled and self.project is not None and hasattr(self.project, 'tracks'):
                 try:
                     if 0 <= int(track_index) < len(self.project.tracks):
                         tr = self.project.tracks[int(track_index)]
@@ -189,57 +312,33 @@ class TimelinePlayer:
                             track_list = track_mono.tolist()
                             track_list = fx_chain.process(track_list)
                             track_mono = np.asarray(track_list, dtype=np.float32)
-                except Exception as e:
+                except Exception:
                     # Fail-safe: ignore effect errors in real-time
                     pass
             
             # Clamp track buffer
             np.clip(track_mono, -1.0, 1.0, out=track_mono)
             
-            # Apply track gain and pan
-            gain = 1.0
-            pan = 0.0
-            if self.mixer is not None and hasattr(self.mixer, "get_track"):
-                tr = self.mixer.get_track(track_index)
-                if tr is not None:
-                    gain = float(tr.get("volume", 1.0))
-                    pan = float(tr.get("pan", 0.0))  # -1..1
-            
-            # Equal-power pan
-            import math
-            angle = (pan + 1) * (math.pi / 4)  # map [-1,1] -> [0, pi/2]
-            gL = math.cos(angle) * gain
-            gR = math.sin(angle) * gain
+            # Use cached gain/pan (PERFORMANCE)
+            if track_index in self._track_state_cache:
+                gL = self._track_state_cache[track_index]['gainL']
+                gR = self._track_state_cache[track_index]['gainR']
+            else:
+                # Fallback if not in cache
+                gain = 1.0
+                pan = 0.0
+                if self.mixer is not None and hasattr(self.mixer, "get_track"):
+                    tr = self.mixer.get_track(track_index)
+                    if tr is not None:
+                        gain = float(tr.get("volume", 1.0))
+                        pan = float(tr.get("pan", 0.0))
+                
+                angle = (pan + 1) * (math.pi / 4)
+                gL = math.cos(angle) * gain
+                gR = math.sin(angle) * gain
 
             # Mix into stereo output
             outL += track_mono * gL
             outR += track_mono * gR
-
-        # Master volume
-        mv = 1.0
-        if self.mixer is not None:
-            mv = float(getattr(self.mixer, "master_volume", 1.0))
-        outL *= mv
-        outR *= mv
-
-        # clamp
-        np.clip(outL, -1.0, 1.0, out=outL)
-        np.clip(outR, -1.0, 1.0, out=outR)
-        outdata[:, 0] = outL
-        outdata[:, 1] = outR
-
-        # advance time and handle loop
-        with self._lock:
-            self._current_time = end_t
-            # check if we need to loop back
-            if self._loop_enabled:
-                if self._current_time >= self._loop_end:
-                    # wrap around to loop start
-                    self._current_time = self._loop_start
-            # update peaks for UI
-            try:
-                self._last_peak_L = float(np.max(np.abs(outL)))
-                self._last_peak_R = float(np.max(np.abs(outR)))
-            except Exception:
-                self._last_peak_L = 0.0
-                self._last_peak_R = 0.0
+        
+        return outL, outR

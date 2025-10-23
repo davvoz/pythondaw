@@ -12,6 +12,7 @@ class Mixer:
         self.tracks = []  # list of dicts: {name, volume, pan, color}
         self.master_volume = 1.0
         self._track_counter = 0  # per nomi auto-generati
+        self._player = None  # Reference to player for cache invalidation
 
     def add_track(self, name=None, volume=1.0, pan=0.0, color=None, mute=False, solo=False):
         """Add a new track to the mixer.
@@ -65,6 +66,13 @@ class Mixer:
         if v > 1.0:
             v = 1.0
         self.master_volume = v
+        # Invalidate player cache
+        if self._player is not None and hasattr(self._player, 'invalidate_cache'):
+            self._player.invalidate_cache()
+    
+    def set_player(self, player):
+        """Set reference to player for cache invalidation."""
+        self._player = player
 
     # Utilities
     def get_track(self, index: int):
@@ -90,6 +98,9 @@ class Mixer:
         """Toggle mute state for a track."""
         if 0 <= index < len(self.tracks):
             self.tracks[index]["mute"] = not self.tracks[index].get("mute", False)
+            # Invalidate player cache
+            if self._player is not None and hasattr(self._player, 'invalidate_cache'):
+                self._player.invalidate_cache()
             return self.tracks[index]["mute"]
         return False
     
@@ -97,6 +108,9 @@ class Mixer:
         """Toggle solo state for a track."""
         if 0 <= index < len(self.tracks):
             self.tracks[index]["solo"] = not self.tracks[index].get("solo", False)
+            # Invalidate player cache
+            if self._player is not None and hasattr(self._player, 'invalidate_cache'):
+                self._player.invalidate_cache()
             return self.tracks[index]["solo"]
         return False
     
